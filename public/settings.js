@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('defaultView').addEventListener('change', saveSettings);
   document.getElementById('timeFormat').addEventListener('change', saveSettings);
   document.getElementById('showWeekends').addEventListener('change', saveSettings);
+  document.getElementById('syncInterval').addEventListener('change', saveSettings);
 
   // Accounts.
   document.getElementById('ms-connect').onclick = () => (location.href = '/auth/microsoft?return=settings');
@@ -28,6 +29,7 @@ async function loadSettings() {
   document.getElementById('defaultView').value = s.defaultView;
   document.getElementById('timeFormat').value = s.timeFormat;
   document.getElementById('showWeekends').checked = s.showWeekends !== false;
+  document.getElementById('syncInterval').value = String(s.syncInterval ?? 15);
 }
 
 async function saveSettings() {
@@ -36,6 +38,7 @@ async function saveSettings() {
     defaultView: document.getElementById('defaultView').value,
     timeFormat: document.getElementById('timeFormat').value,
     showWeekends: document.getElementById('showWeekends').checked,
+    syncInterval: Number(document.getElementById('syncInterval').value),
   };
   await fetch('/api/settings', {
     method: 'PUT',

@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS = {
   defaultView: 'timeGridWeek', // dayGridMonth | timeGridWeek | timeGridDay
   timeFormat: '24h', // '24h' | '12h'
   showWeekends: true,
+  syncInterval: 15, // minutes between background syncs; 0 = never
   // Per-OAuth-source color + visibility (ICS feeds carry their own, in feeds.json).
   providers: {
     microsoft: { color: '#2563eb', visible: true },
@@ -126,6 +127,7 @@ export function updateSettings(patch = {}) {
     next.defaultView = patch.defaultView;
   if (['24h', '12h'].includes(patch.timeFormat)) next.timeFormat = patch.timeFormat;
   if (typeof patch.showWeekends === 'boolean') next.showWeekends = patch.showWeekends;
+  if ([0, 5, 15, 30, 60].includes(patch.syncInterval)) next.syncInterval = patch.syncInterval;
   settings = next;
   persistSettings();
   return settings;

@@ -1,53 +1,157 @@
 let calendar;
-let dayCal; // lazy day-view calendar inside the day modal
+let dayCal;
 let settings = {};
-// Cache of the full (unfiltered) event set per visible date range, so toggling
-// a calendar's visibility filters locally without re-hitting the APIs.
 const eventCache = new Map(); // "startStr|endStr" -> events[]
 const visibility = {}; // calId -> boolean (false = hidden)
+const staleKeys = new Set(); // keys loaded from localStorage that need background refresh
+const refreshingKeys = new Set(); // keys currently being background-refreshed
+
+const CACHE_KEY = 'calCache_v1';
+let lastSyncedTime = null;
+let bgSyncTimer = null;
+
+// ── Persistent cache ──
+
+function loadPersistedCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data.version !== 1) return;
+    for (const [key, events] of Object.entries(data.entries || {})) {
+      eventCache.set(key, events);
+      staleKeys.add(key);
+    }
+    lastSyncedTime = data.lastSynced || null;
+  } catch { /* ignore corrupt cache */ }
+}
+
+function savePersistentCache() {
+  try {
+    const entries = {};
+    // Keep at most 12 entries to stay within localStorage quota
+    const keys = [...eventCache.keys()];
+    for (const k of keys.slice(Math.max(0, keys.length - 12))) entries[k] = eventCache.get(k);
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ version: 1, lastSynced: lastSyncedTime, entries }));
+  } catch { /* quota exceeded — ignore */ }
+}
+
+function updateLastSynced() {
+  lastSyncedTime = new Date().toISOString();
+  updateLastSyncedDisplay();
+  savePersistentCache();
+}
+
+function updateLastSyncedDisplay() {
+  const el = document.getElementById('last-synced');
+  if (!el) return;
+  if (!lastSyncedTime) { el.textContent = ''; return; }
+  const diffMin = Math.floor((Date.now() - new Date(lastSyncedTime)) / 60000);
+  if (diffMin < 1) el.textContent = 'Synced just now';
+  else if (diffMin < 60) el.textContent = `Synced ${diffMin}m ago`;
+  else {
+    const h = Math.floor(diffMin / 60);
+    el.textContent = h < 24 ? `Synced ${h}h ago` : `Synced ${new Date(lastSyncedTime).toLocaleDateString()}`;
+  }
+}
+
+// ── Initialization ──
 
 document.addEventListener('DOMContentLoaded', async () => {
   showOAuthError();
   settings = await fetch('/api/settings').then((r) => r.json());
-  // Seed the visibility map (and sidebar) before the calendar's first fetch,
-  // so calendars persisted as hidden don't flash into view on load.
+  // Populate cache from localStorage before first render so FullCalendar gets
+  // cached data immediately on load, then background-refreshes stale entries.
+  loadPersistedCache();
   await renderCalendars();
   initCalendar();
   renderStatus();
   setupZoom();
   setupModals();
+  setupJumpTo();
+  setupBackgroundSync(settings.syncInterval ?? 15);
+  updateLastSyncedDisplay();
+  setInterval(updateLastSyncedDisplay, 60000);
   document.getElementById('sync-btn').addEventListener('click', syncNow);
 });
 
-// Shared event loader used by both the main calendar and the day modal.
-// Caches the full set per date range; filters hidden calendars locally.
+// ── Event loading ──
+// Returns cached events immediately if available, and kicks off a silent
+// background refresh for entries that were loaded from persistent storage.
+
 async function loadEvents(info) {
   const key = `${info.startStr}|${info.endStr}`;
   let all = eventCache.get(key);
   if (!all) {
-    const params = new URLSearchParams({ start: info.startStr, end: info.endStr });
-    const data = await fetch(`/api/events?${params}`).then((r) => r.json());
-    if (data.errors?.length) {
-      showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
-    } else {
-      hideBanner();
-    }
-    all = data.events || [];
-    eventCache.set(key, all);
+    all = await fetchFromApi(key, info.startStr, info.endStr);
+  } else if (staleKeys.has(key)) {
+    staleKeys.delete(key);
+    refreshInBackground(key, info.startStr, info.endStr);
   }
   return all.filter((e) => visibility[e.calId] !== false);
 }
+
+async function fetchFromApi(key, startStr, endStr) {
+  const params = new URLSearchParams({ start: startStr, end: endStr });
+  const data = await fetch(`/api/events?${params}`).then((r) => r.json());
+  if (data.errors?.length) showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
+  else hideBanner();
+  const events = data.events || [];
+  eventCache.set(key, events);
+  updateLastSynced();
+  return events;
+}
+
+async function refreshInBackground(key, startStr, endStr) {
+  if (refreshingKeys.has(key)) return;
+  refreshingKeys.add(key);
+  try {
+    const params = new URLSearchParams({ start: startStr, end: endStr });
+    const data = await fetch(`/api/events?${params}`).then((r) => r.json());
+    if (data.errors?.length) showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
+    else hideBanner();
+    eventCache.set(key, data.events || []);
+    updateLastSynced();
+    if (calendar) calendar.refetchEvents();
+    if (dayCal) dayCal.refetchEvents();
+  } catch { /* silent failure */ }
+  finally { refreshingKeys.delete(key); }
+}
+
+// ── Background sync ──
+
+function setupBackgroundSync(intervalMinutes) {
+  if (bgSyncTimer) clearInterval(bgSyncTimer);
+  bgSyncTimer = null;
+  if (!intervalMinutes) return;
+  bgSyncTimer = setInterval(() => {
+    // Mark all cached entries stale; the current view range will refresh
+    // immediately on the next refetchEvents call.
+    for (const key of eventCache.keys()) {
+      if (!refreshingKeys.has(key)) staleKeys.add(key);
+    }
+    if (calendar) {
+      calendar.refetchEvents();
+      if (dayCal) dayCal.refetchEvents();
+    }
+  }, intervalMinutes * 60 * 1000);
+}
+
+// ── Time format ──
 
 function timeFmt() {
   const hour12 = settings.timeFormat === '12h';
   return { hour: hour12 ? 'numeric' : '2-digit', minute: '2-digit', hour12 };
 }
 
+// ── Calendar initialization ──
+
 function initCalendar() {
   calendar = new FullCalendar.Calendar(document.getElementById('calendar'), {
     initialView: settings.defaultView || 'timeGridWeek',
     firstDay: settings.firstDay ?? 1,
     weekends: settings.showWeekends !== false,
+    weekNumbers: true,
     eventTimeFormat: timeFmt(),
     slotLabelFormat: timeFmt(),
     headerToolbar: {
@@ -55,8 +159,6 @@ function initCalendar() {
       center: 'title',
       right: 'dayGridMonth,timeGridWeek,timeGridDay',
     },
-    // Note: no `height: 'auto'` — that makes FullCalendar ignore contentHeight,
-    // which is how we zoom. We control the content area height instead.
     contentHeight: 'auto',
     nowIndicator: true,
     dayMaxEvents: true,
@@ -65,17 +167,51 @@ function initCalendar() {
       info.jsEvent.preventDefault();
       openModal(info.event);
     },
-    // Clicking empty space on a day in month view opens that day's detail view.
     dateClick: (info) => {
       if (calendar.view.type === 'dayGridMonth') openDayModal(info.date);
     },
-    // Re-apply zoom whenever the view re-renders (nav or view switch).
-    datesSet: applyZoom,
+    datesSet: () => {
+      applyZoom();
+      syncJumpToSelectors();
+    },
   });
   calendar.render();
 }
 
+// ── Jump to year / month ──
+
+function setupJumpTo() {
+  const monthSel = document.getElementById('jump-month');
+  const yearSel = document.getElementById('jump-year');
+  if (!monthSel || !yearSel) return;
+
+  const currentYear = new Date().getFullYear();
+  for (let y = currentYear - 3; y <= currentYear + 10; y++) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = y;
+    yearSel.appendChild(opt);
+  }
+
+  monthSel.addEventListener('change', () =>
+    calendar.gotoDate(new Date(parseInt(yearSel.value), parseInt(monthSel.value), 1))
+  );
+  yearSel.addEventListener('change', () =>
+    calendar.gotoDate(new Date(parseInt(yearSel.value), parseInt(monthSel.value), 1))
+  );
+}
+
+function syncJumpToSelectors() {
+  const monthSel = document.getElementById('jump-month');
+  const yearSel = document.getElementById('jump-year');
+  if (!monthSel || !yearSel || !calendar) return;
+  const d = calendar.getDate();
+  monthSel.value = d.getMonth();
+  yearSel.value = d.getFullYear();
+}
+
 // ── Connection chips (read-only) ──
+
 async function renderStatus() {
   const me = await fetch('/api/me').then((r) => r.json());
   const el = document.getElementById('status');
@@ -88,6 +224,7 @@ async function renderStatus() {
 }
 
 // ── Calendars sidebar: per-calendar color + show/hide ──
+
 async function renderCalendars() {
   const { calendars } = await fetch('/api/calendars').then((r) => r.json());
   const list = document.getElementById('calendars');
@@ -97,7 +234,7 @@ async function renderCalendars() {
     return;
   }
   for (const cal of calendars) {
-    visibility[cal.id] = cal.visible; // seed the local visibility map
+    visibility[cal.id] = cal.visible;
     const li = document.createElement('li');
     li.className = 'cal-item';
     li.innerHTML = `
@@ -149,9 +286,7 @@ function webCalUrl(cal) {
     const base = `https://calendar.google.com/calendar/r/${view}`;
     return view === 'month' ? `${base}/${y}/${m}` : `${base}/${y}/${m}/${d}`;
   }
-  if (isOutlook) {
-    return `https://outlook.office.com/calendar/view/${view}`;
-  }
+  if (isOutlook) return `https://outlook.office.com/calendar/view/${view}`;
   return null;
 }
 
@@ -168,27 +303,42 @@ function persistCalendar(cal, patch) {
 function toggleCalendar(cal, visible, li) {
   visibility[cal.id] = visible;
   li.querySelector('.cal-name').classList.toggle('muted', !visible);
-  persistCalendar(cal, { visible }); // remember across reloads
-  // Re-run the events feed: it's a cache hit, so this just re-filters locally.
+  persistCalendar(cal, { visible });
   calendar.refetchEvents();
 }
 
 function recolorCalendar(cal, color) {
   cal.color = color;
   persistCalendar(cal, { color });
-  // Update the cached copies, then re-render from cache (no network).
   for (const list of eventCache.values()) {
     for (const e of list) if (e.calId === cal.id) e.color = color;
   }
+  savePersistentCache();
   calendar.refetchEvents();
 }
 
+// ── Sync: clear cache and pull fresh data ──
+
+async function syncNow() {
+  const btn = document.getElementById('sync-btn');
+  btn.classList.add('spinning');
+  btn.disabled = true;
+  eventCache.clear();
+  staleKeys.clear();
+  try { localStorage.removeItem(CACHE_KEY); } catch {}
+  await Promise.all([renderCalendars(), renderStatus()]);
+  calendar.refetchEvents();
+  if (dayCal) dayCal.refetchEvents();
+  setTimeout(() => {
+    btn.classList.remove('spinning');
+    btn.disabled = false;
+  }, 500);
+}
+
 // ── Ctrl + scroll to zoom time slots (week/day views) ──
-// We zoom by setting FullCalendar's `contentHeight` (slot px × slot rows) and
-// letting FullCalendar lay out the events itself — so events always stay
-// aligned with the hour lines, no matter how big the change.
+
 const SLOT_MIN = 14, SLOT_MAX = 90;
-let slotPx = parseInt(localStorage.getItem('slotPx') || '0', 10) || 0; // 0 = auto
+let slotPx = parseInt(localStorage.getItem('slotPx') || '0', 10) || 0;
 let lastContentHeight;
 let zoomScheduled = false;
 
@@ -211,41 +361,23 @@ function setupZoom() {
   document.getElementById('calendar').addEventListener(
     'wheel',
     (e) => {
-      if (!e.ctrlKey && !e.metaKey) return; // plain scroll stays normal scrolling
+      if (!e.ctrlKey && !e.metaKey) return;
       if (!calendar.view.type.startsWith('timeGrid')) return;
       e.preventDefault();
-      const base = slotPx || 24; // FullCalendar's roughly-default slot height
+      const base = slotPx || 24;
       slotPx = Math.min(SLOT_MAX, Math.max(SLOT_MIN, base + (e.deltaY < 0 ? 6 : -6)));
       localStorage.setItem('slotPx', String(slotPx));
-      // Coalesce rapid wheel ticks into one re-layout per frame.
       if (!zoomScheduled) {
         zoomScheduled = true;
-        requestAnimationFrame(() => {
-          zoomScheduled = false;
-          applyZoom();
-        });
+        requestAnimationFrame(() => { zoomScheduled = false; applyZoom(); });
       }
     },
     { passive: false }
   );
 }
 
-// ── Sync: clear cache and pull fresh data from all calendars ──
-async function syncNow() {
-  const btn = document.getElementById('sync-btn');
-  btn.classList.add('spinning');
-  btn.disabled = true;
-  eventCache.clear();
-  await Promise.all([renderCalendars(), renderStatus()]);
-  calendar.refetchEvents();
-  if (dayCal) dayCal.refetchEvents();
-  setTimeout(() => {
-    btn.classList.remove('spinning');
-    btn.disabled = false;
-  }, 500);
-}
-
 // ── Modals (event details + day view) ──
+
 function setupModals() {
   const eventOverlay = document.getElementById('event-modal');
   const dayOverlay = document.getElementById('day-modal');
@@ -254,27 +386,17 @@ function setupModals() {
 
   document.getElementById('modal-close').onclick = closeEvent;
   document.getElementById('day-modal-close').onclick = closeDay;
-  eventOverlay.addEventListener('click', (e) => {
-    if (e.target === eventOverlay) closeEvent();
-  });
-  dayOverlay.addEventListener('click', (e) => {
-    if (e.target === dayOverlay) closeDay();
-  });
+  eventOverlay.addEventListener('click', (e) => { if (e.target === eventOverlay) closeEvent(); });
+  dayOverlay.addEventListener('click', (e) => { if (e.target === dayOverlay) closeDay(); });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      closeEvent();
-      closeDay();
-    }
+    if (e.key === 'Escape') { closeEvent(); closeDay(); }
   });
 }
 
 function openDayModal(date) {
   const overlay = document.getElementById('day-modal');
   document.getElementById('day-modal-title').textContent = date.toLocaleDateString([], {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   });
   overlay.classList.remove('hidden');
 
@@ -299,8 +421,6 @@ function openDayModal(date) {
     dayCal.gotoDate(date);
     dayCal.refetchEvents();
   }
-  // The calendar was rendered while hidden (zero size). Re-measure now that it's
-  // visible, and scroll to the current time so "now" and nearby events show.
   setTimeout(() => {
     dayCal.updateSize();
     dayCal.scrollToTime({ hours: Math.max(0, new Date().getHours() - 1) });
@@ -340,7 +460,6 @@ function formatEventTime(event) {
   const tOpts = timeFmt();
   if (event.allDay) {
     const start = event.start;
-    // All-day end is exclusive in FullCalendar; show the inclusive last day.
     const end = event.end ? new Date(event.end.getTime() - 86400000) : null;
     if (!end || end.toDateString() === start.toDateString())
       return start.toLocaleDateString([], dOpts) + ' · All day';
@@ -358,6 +477,7 @@ function formatEventTime(event) {
 }
 
 // ── Helpers ──
+
 function showBanner(msg) {
   const b = document.getElementById('banner');
   b.textContent = '⚠ ' + msg;
