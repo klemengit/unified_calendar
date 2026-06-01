@@ -1,0 +1,22 @@
+{
+  "name": "unified-calendar",
+  "version": "1.0.0",
+  "description": "Unified calendar showing Microsoft Outlook and Google Calendar events in one view",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "connect-ensure-login": "^0.1.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "node-ical": "^0.26.1",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "passport-microsoft": "^2.1.0"
+  }
+}
