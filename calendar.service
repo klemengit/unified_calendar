@@ -1,0 +1,15 @@
+[Unit]
+Description=Unified Calendar App
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Data/git_repos/calendar
+# Replace the path below with: which npm   (or: which node, then use node server.js)
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

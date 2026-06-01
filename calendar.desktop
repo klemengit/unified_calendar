@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Calendar
+Comment=Unified Outlook + Google Calendar
+Exec=xdg-open http://localhost:8585
+Icon=x-office-calendar
+Terminal=false
+Categories=Office;Calendar;
+StartupNotify=false
