@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings · Unified Calendar</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>⚙ Settings</h1>
+    <a class="settings-link" href="/">← Back to calendar</a>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <main class="settings">
+    <!-- Calendar preferences -->
+    <section class="card">
+      <h2>Calendar</h2>
+      <div class="field">
+        <label for="firstDay">Week starts on</label>
+        <select id="firstDay">
+          <option value="1">Monday</option>
+          <option value="0">Sunday</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="defaultView">Default view</label>
+        <select id="defaultView">
+          <option value="timeGridWeek">Week</option>
+          <option value="dayGridMonth">Month</option>
+          <option value="timeGridDay">Day</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="timeFormat">Time format</label>
+        <select id="timeFormat">
+          <option value="24h">24-hour (14:00)</option>
+          <option value="12h">12-hour (2:00 PM)</option>
+        </select>
+      </div>
+      <div class="field row">
+        <label for="showWeekends">Show weekends</label>
+        <input type="checkbox" id="showWeekends" />
+      </div>
+      <p class="saved-note" id="saved-note"></p>
+    </section>
+
+    <!-- Account logins -->
+    <section class="card">
+      <h2>Accounts (login)</h2>
+      <p class="hint">Full read access to your live calendar via OAuth.</p>
+      <div class="account-row" data-provider="microsoft">
+        <span class="dot ms"></span>
+        <span class="label" id="ms-status">Outlook</span>
+        <button class="connect" id="ms-connect">Connect</button>
+        <button class="disconnect hidden" id="ms-disconnect">Disconnect</button>
+      </div>
+      <div class="account-row" data-provider="google">
+        <span class="dot g"></span>
+        <span class="label" id="g-status">Google</span>
+        <button class="connect" id="g-connect">Connect</button>
+        <button class="disconnect hidden" id="g-disconnect">Disconnect</button>
+      </div>
+    </section>
+
+    <!-- ICS imports -->
+    <section class="card">
+      <h2>Imports (ICS subscriptions)</h2>
+      <p class="hint">
+        Paste a published <code>.ics</code> URL — Outlook <em>"Publish calendar"</em>
+        or Google <em>"Secret address in iCal format"</em>. No login needed.
+      </p>
+      <form id="ics-form" class="ics-form">
+        <input type="text" id="ics-name" placeholder="Label (e.g. Work)" />
+        <input type="url" id="ics-url" placeholder="https://…/calendar.ics or webcal://…" required />
+        <button type="submit">Add</button>
+      </form>
+      <ul id="ics-list" class="ics-list"></ul>
+    </section>
+  </main>
+
+  <script src="/settings.js"></script>
+</body>
+</html>

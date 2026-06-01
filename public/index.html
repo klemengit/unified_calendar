@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Unified Calendar</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <!-- FullCalendar (month/week/day views) from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>📅 Unified Calendar</h1>
+    <div class="topbar-right">
+      <div class="status" id="status"><!-- compact connection chips --></div>
+      <button id="sync-btn" class="sync-btn" title="Refresh events from all calendars"><span class="sync-icon">⟳</span> Sync</button>
+      <a class="settings-link" href="/settings.html">⚙ Settings</a>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <h2>Calendars</h2>
+      <ul id="calendars" class="cal-list"></ul>
+      <p class="zoom-hint">💡 In week/day view, hold <kbd>Ctrl</kbd> and scroll to
+        zoom the time slots.</p>
+    </aside>
+    <main>
+      <div id="calendar"></div>
+    </main>
+  </div>
+
+  <!-- Event details modal -->
+  <div id="event-modal" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+      <h3 id="modal-title"></h3>
+      <div class="modal-row" id="modal-cal"></div>
+      <div class="modal-row" id="modal-time"></div>
+      <div class="modal-row" id="modal-location"></div>
+      <div class="modal-desc" id="modal-description"></div>
+      <a class="modal-open" id="modal-open" href="#" target="_blank" rel="noopener">Open original ↗</a>
+    </div>
+  </div>
+
+  <!-- Day-view modal (opened by clicking an empty day in month view) -->
+  <div id="day-modal" class="modal-overlay hidden">
+    <div class="modal day-modal-box" role="dialog" aria-modal="true">
+      <button class="modal-close" id="day-modal-close" aria-label="Close">✕</button>
+      <h3 id="day-modal-title"></h3>
+      <div id="day-calendar"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
