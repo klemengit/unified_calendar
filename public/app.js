@@ -246,6 +246,13 @@ function initCalendar() {
     },
   });
   calendar.render();
+
+  document.getElementById('open-google').addEventListener('click', () => {
+    window.open(providerUrl('google'), '_blank', 'noopener');
+  });
+  document.getElementById('open-outlook').addEventListener('click', () => {
+    window.open(providerUrl('outlook'), '_blank', 'noopener');
+  });
 }
 
 // ── Jump to year / month ──
@@ -312,19 +319,17 @@ async function renderCalendars() {
       <input type="color" class="cal-color" value="${cal.color}" title="Change color" />
       <span class="cal-name ${cal.visible ? '' : 'muted'}">${esc(cal.name)}</span>`;
 
-    if (hasWebCal(cal)) {
-      const link = document.createElement('a');
-      link.className = 'cal-link';
-      link.textContent = '↗';
-      link.title = 'Open in web calendar';
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.addEventListener('click', (e) => {
+    if (cal.id === 'google' || cal.id === 'microsoft') {
+      const btn = document.createElement('button');
+      btn.className = 'cal-open-btn';
+      btn.textContent = '↗';
+      btn.title = `Open in ${cal.id === 'google' ? 'Google Calendar' : 'Outlook'}`;
+      btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const url = webCalUrl(cal);
-        if (url) { e.preventDefault(); window.open(url, '_blank'); }
+        if (url) window.open(url, '_blank', 'noopener');
       });
-      li.appendChild(link);
+      li.appendChild(btn);
     }
 
     li.querySelector('.cal-toggle').addEventListener('change', (e) =>
@@ -337,11 +342,7 @@ async function renderCalendars() {
   }
 }
 
-function hasWebCal(cal) {
-  return cal.id === 'google' || cal.id === 'microsoft' || !!cal.webCalBase;
-}
-
-function webCalUrl(cal) {
+function providerUrl(provider) {
   const date = calendar.getDate();
   const viewType = calendar.view.type;
   const y = date.getFullYear();
@@ -349,15 +350,16 @@ function webCalUrl(cal) {
   const d = date.getDate();
   const view = viewType === 'dayGridMonth' ? 'month' : viewType === 'timeGridDay' ? 'day' : 'week';
 
-  const isGoogle = cal.id === 'google' || cal.webCalBase === 'google';
-  const isOutlook = cal.id === 'microsoft' || cal.webCalBase === 'outlook';
-
-  if (isGoogle) {
+  if (provider === 'google') {
     const base = `https://calendar.google.com/calendar/r/${view}`;
     return view === 'month' ? `${base}/${y}/${m}` : `${base}/${y}/${m}/${d}`;
   }
-  if (isOutlook) return `https://outlook.office.com/calendar/view/${view}`;
-  return null;
+  return `https://outlook.office.com/calendar/view/${view}`;
+}
+
+function webCalUrl(cal) {
+  const isGoogle = cal.id === 'google' || cal.webCalBase === 'google';
+  return providerUrl(isGoogle ? 'google' : 'outlook');
 }
 
 function persistCalendar(cal, patch) {

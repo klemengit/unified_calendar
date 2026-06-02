@@ -150,9 +150,18 @@ main { padding: 20px 24px; flex: 1; min-width: 0; }
 }
 .cal-item:hover { background: #eceef1; }
 .cal-name { font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-.cal-link { font-size: 0.75rem; color: var(--muted); text-decoration: none; flex: 0 0 auto; opacity: 0.35; transition: opacity 0.15s; line-height: 1; padding: 0 2px; }
-.cal-item:hover .cal-link { opacity: 1; }
-.cal-link:hover { color: var(--text); }
+.cal-open-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  padding: 2px 6px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex: 0 0 auto;
+  border-radius: 5px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.cal-open-btn:hover { background: #eceef1; color: var(--text); }
 .cal-toggle { width: 16px; height: 16px; cursor: pointer; }
 .cal-color {
   width: 22px;
@@ -165,6 +174,20 @@ main { padding: 20px 24px; flex: 1; min-width: 0; }
 }
 .cal-color::-webkit-color-swatch { border: none; border-radius: 4px; }
 .cal-color::-moz-color-swatch { border: none; border-radius: 4px; }
+
+.provider-links { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.provider-link-btn {
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 0.83rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.provider-link-btn:hover { background: #eceef1; }
 
 .zoom-hint { color: var(--muted); font-size: 0.78rem; line-height: 1.4; margin: 18px 0 0; }
 .zoom-hint kbd {
