@@ -118,13 +118,14 @@ async function loadGoogleCalendars() {
     for (const cal of calendars) {
       const li = document.createElement('li');
       li.className = 'gcal-item';
+      const displayName = cal.storedName ?? cal.name;
       li.innerHTML = `
         <input type="checkbox" class="gcal-check" ${cal.selected ? 'checked' : ''}
                data-google-id="${esc(cal.googleId)}"
                data-color="${esc(cal.backgroundColor)}" />
         <span class="swatch" style="background:${esc(cal.backgroundColor)};width:14px;height:14px;border-radius:3px;flex-shrink:0"></span>
-        <input type="text" class="gcal-name-input" value="${esc(cal.name)}" title="Rename calendar" />
-        <span class="muted" style="font-size:0.78rem">${esc(cal.accessRole)}</span>`;
+        <input type="text" class="gcal-name-input" value="${esc(displayName)}" title="Rename calendar" />
+        <span class="gcal-original-name">${esc(cal.name)}</span>`;
       list.appendChild(li);
     }
     document.getElementById('google-cals-loading').classList.add('hidden');
@@ -268,9 +269,11 @@ function renderCaldavCalSection(account) {
     <li class="gcal-item">
       <input type="checkbox" class="gcal-check" ${cal.selected ? 'checked' : ''}
              data-cal-id="${esc(cal.id)}" data-url="${esc(cal.url)}"
-             data-color="${esc(cal.color || '#0891b2')}" />
+             data-color="${esc(cal.color || '#0891b2')}"
+             data-original-name="${esc(cal.originalName || cal.name)}" />
       <span class="swatch" style="background:${esc(cal.color || '#0891b2')};width:14px;height:14px;border-radius:3px;flex-shrink:0"></span>
       <input type="text" class="gcal-name-input" value="${esc(cal.name)}" title="Rename calendar" />
+      <span class="gcal-original-name">${esc(cal.originalName || cal.name)}</span>
     </li>`).join('');
 
   section.innerHTML = `
@@ -330,6 +333,7 @@ async function saveCaldavCalendars(accountId) {
       id: c.dataset.calId,
       url: c.dataset.url,
       name: (nameInput?.value || '').trim() || c.dataset.calId,
+      originalName: c.dataset.originalName || c.dataset.calId,
       color: c.dataset.color,
       selected: c.checked,
     };

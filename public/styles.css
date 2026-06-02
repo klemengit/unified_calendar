@@ -480,6 +480,13 @@ button.danger:hover { background: #fee2e2; }
   padding: 4px 0;
 }
 .gcal-name { flex: 1; font-size: 0.9rem; }
+.gcal-original-name {
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
 .gcal-name-input {
   flex: 1;
   font-size: 0.9rem;

@@ -178,8 +178,11 @@ app.get('/api/google/calendars', async (req, res) => {
     const fresh = await freshToken('google', req);
     const allCals = await listGoogleCalendars(fresh);
     const saved = getGoogleCalendars();
-    const savedIds = new Set(saved.map((c) => c.googleId));
-    const calendars = allCals.map((c) => ({ ...c, selected: savedIds.has(c.googleId) }));
+    const savedMap = new Map(saved.map((c) => [c.googleId, c]));
+    const calendars = allCals.map((c) => {
+      const s = savedMap.get(c.googleId);
+      return { ...c, selected: Boolean(s), storedName: s?.name ?? null };
+    });
     res.json({ calendars });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -393,6 +396,7 @@ app.post('/api/caldav/accounts', async (req, res) => {
     const calendars = discovered.map((cal) => ({
       ...cal,
       id: cal.id.replace('cdav_tmp', account.id),
+      originalName: cal.name,
       selected: false,
       visible: true,
     }));
@@ -417,7 +421,14 @@ app.get('/api/caldav/accounts/:id/calendars', async (req, res) => {
     const existing = account.calendars || [];
     const merged = discovered.map((cal) => {
       const prev = existing.find((c) => c.id === cal.id);
-      return { ...cal, selected: prev?.selected || false, visible: prev?.visible !== false, color: prev?.color || cal.color };
+      return {
+        ...cal,
+        originalName: cal.name,
+        name: prev?.name || cal.name,
+        selected: prev?.selected || false,
+        visible: prev?.visible !== false,
+        color: prev?.color || cal.color,
+      };
     });
     setCaldavCalendars(account.id, merged);
     res.json({ calendars: merged });
@@ -435,6 +446,7 @@ app.put('/api/caldav/accounts/:id/calendars', (req, res) => {
     id: c.id,
     url: c.url,
     name: c.name || c.url,
+    originalName: c.originalName || c.name || c.url,
     color: HEX.test(c.color) ? c.color : '#0891b2',
     selected: Boolean(c.selected),
     visible: c.visible !== false,
