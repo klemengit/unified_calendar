@@ -60,6 +60,7 @@ managed with `systemctl`.
 cp calendar.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now calendar
+systemctl --user restart calendar
 ```
 
 The service auto-starts on login and restarts if it crashes.
