@@ -32,7 +32,20 @@ import {
   getGoogleCalendars,
   setGoogleCalendars,
   updateGoogleCalendar,
+  getCaldavAccounts,
+  getCaldavAccount,
+  addCaldavAccount,
+  removeCaldavAccount,
+  setCaldavCalendars,
+  updateCaldavCalendar,
+  findCaldavCalendar,
 } from './src/store.js';
+import {
+  discoverCalendars,
+  createCalDavEvent,
+  updateCalDavEvent,
+  deleteCalDavEvent,
+} from './src/caldav.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -285,6 +298,19 @@ app.get('/api/calendars', (req, res) => {
     calendars.push({ id: f.id, kind: 'ics', name: f.name, color: f.color, visible: f.visible !== false, webCalBase });
   }
 
+  for (const account of getCaldavAccounts()) {
+    for (const cal of (account.calendars || []).filter((c) => c.selected)) {
+      calendars.push({
+        id: cal.id,
+        kind: 'caldav-sub',
+        name: cal.name,
+        color: cal.color || '#0891b2',
+        visible: cal.visible !== false,
+        writeable: true,
+      });
+    }
+  }
+
   res.json({ calendars });
 });
 
@@ -315,6 +341,140 @@ app.delete('/api/ics/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── CalDAV accounts ──
+
+function publicCaldavAccount(account) {
+  const { password, ...rest } = account;
+  return rest;
+}
+
+app.get('/api/caldav/accounts', (req, res) => {
+  res.json({ accounts: getCaldavAccounts().map(publicCaldavAccount) });
+});
+
+app.post('/api/caldav/accounts', async (req, res) => {
+  const { server, username, password, displayName } = req.body || {};
+  if (!server || !username || !password)
+    return res.status(400).json({ error: 'server, username, and password are required' });
+  try {
+    const tempId = `cdav_tmp`;
+    const discovered = await discoverCalendars(server.trim(), username.trim(), password, tempId);
+    const account = addCaldavAccount({
+      server: server.trim(),
+      username: username.trim(),
+      password,
+      displayName: (displayName || '').trim() || username.trim(),
+      calendars: [],
+    });
+    // Assign real IDs now that we have the accountId
+    const calendars = discovered.map((cal) => ({
+      ...cal,
+      id: cal.id.replace('cdav_tmp', account.id),
+      selected: false,
+      visible: true,
+    }));
+    setCaldavCalendars(account.id, calendars);
+    res.status(201).json({ account: publicCaldavAccount(getCaldavAccount(account.id)) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/caldav/accounts/:id', (req, res) => {
+  removeCaldavAccount(req.params.id);
+  res.json({ ok: true });
+});
+
+// Re-discover calendars for an account (refresh)
+app.get('/api/caldav/accounts/:id/calendars', async (req, res) => {
+  const account = getCaldavAccount(req.params.id);
+  if (!account) return res.status(404).json({ error: 'Unknown account' });
+  try {
+    const discovered = await discoverCalendars(account.server, account.username, account.password, account.id);
+    const existing = account.calendars || [];
+    const merged = discovered.map((cal) => {
+      const prev = existing.find((c) => c.id === cal.id);
+      return { ...cal, selected: prev?.selected || false, visible: prev?.visible !== false, color: prev?.color || cal.color };
+    });
+    setCaldavCalendars(account.id, merged);
+    res.json({ calendars: merged });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save calendar selection for an account
+app.put('/api/caldav/accounts/:id/calendars', (req, res) => {
+  const account = getCaldavAccount(req.params.id);
+  if (!account) return res.status(404).json({ error: 'Unknown account' });
+  const HEX = /^#[0-9a-fA-F]{6}$/;
+  const calendars = (req.body.calendars || []).map((c) => ({
+    id: c.id,
+    url: c.url,
+    name: c.name || c.url,
+    color: HEX.test(c.color) ? c.color : '#0891b2',
+    selected: Boolean(c.selected),
+    visible: c.visible !== false,
+  }));
+  setCaldavCalendars(account.id, calendars);
+  res.json({ ok: true });
+});
+
+// Update CalDAV calendar color/visibility (from sidebar)
+app.patch('/api/caldav/calendars/:id', (req, res) => {
+  const result = updateCaldavCalendar(decodeURIComponent(req.params.id), req.body || {});
+  if (!result) return res.status(404).json({ error: 'Unknown calendar' });
+  res.json(result);
+});
+
+// ── CalDAV event CRUD ──
+
+function caldavWriteError(err) {
+  return { status: 500, message: err.message };
+}
+
+app.post('/api/caldav/events', async (req, res) => {
+  const { calId, title, start, end, allDay, location, description } = req.body || {};
+  if (!calId || !title || !start) return res.status(400).json({ error: 'calId, title and start are required' });
+  const found = findCaldavCalendar(calId);
+  if (!found) return res.status(404).json({ error: 'Unknown CalDAV calendar' });
+  try {
+    const event = await createCalDavEvent(found.account, found.calendar, { title, start, end, allDay, location, description });
+    res.status(201).json({ event });
+  } catch (err) {
+    const { status, message } = caldavWriteError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.put('/api/caldav/events/:uid', async (req, res) => {
+  const { calId, title, start, end, allDay, location, description } = req.body || {};
+  if (!calId || !title || !start) return res.status(400).json({ error: 'calId, title and start are required' });
+  const found = findCaldavCalendar(calId);
+  if (!found) return res.status(404).json({ error: 'Unknown CalDAV calendar' });
+  try {
+    const event = await updateCalDavEvent(found.account, found.calendar, req.params.uid, { title, start, end, allDay, location, description });
+    res.json({ event });
+  } catch (err) {
+    const { status, message } = caldavWriteError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.delete('/api/caldav/events/:uid', async (req, res) => {
+  const { calId } = req.query;
+  if (!calId) return res.status(400).json({ error: 'calId query param required' });
+  const found = findCaldavCalendar(calId);
+  if (!found) return res.status(404).json({ error: 'Unknown CalDAV calendar' });
+  try {
+    await deleteCalDavEvent(found.account, req.params.uid, found.calendar.url);
+    res.json({ ok: true });
+  } catch (err) {
+    const { status, message } = caldavWriteError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
 // ── Unified events ──
 app.get('/api/events', async (req, res) => {
   const now = new Date();
@@ -323,7 +483,8 @@ app.get('/api/events', async (req, res) => {
 
   const hasTokens = req.session.tokens && Object.keys(req.session.tokens).length > 0;
   const hasIcs = feedCount() > 0;
-  if (!hasTokens && !hasIcs) {
+  const hasCaldav = getCaldavAccounts().some((a) => (a.calendars || []).some((c) => c.selected));
+  if (!hasTokens && !hasIcs && !hasCaldav) {
     return res.json({ events: [], errors: [] });
   }
   try {
@@ -333,7 +494,8 @@ app.get('/api/events', async (req, res) => {
       timeMax,
       getFeeds(),
       getSettings().providers,
-      getGoogleCalendars()
+      getGoogleCalendars(),
+      getCaldavAccounts()
     );
     res.json(result);
   } catch (err) {

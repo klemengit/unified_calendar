@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { config } from './config.js';
 import { fetchIcsEvents } from './ics.js';
+import { fetchCalDavEvents } from './caldav.js';
 
 export const COLORS = { microsoft: '#2563eb', google: '#16a34a' };
 
@@ -184,7 +185,8 @@ export async function getUnifiedEvents(
   timeMax,
   icsFeeds = [],
   providers = {},
-  googleCalendars = []
+  googleCalendars = [],
+  caldavAccounts = []
 ) {
   const tokens = session.tokens || {};
   const ms = providers.microsoft || { color: COLORS.microsoft, visible: true };
@@ -232,6 +234,18 @@ export async function getUnifiedEvents(
         (err) => errors.push({ provider: `ics:${feed.name}`, message: describe(err) })
       )
     );
+  }
+
+  for (const account of caldavAccounts) {
+    const selectedCals = (account.calendars || []).filter((c) => c.selected && c.visible !== false);
+    for (const cal of selectedCals) {
+      jobs.push(
+        fetchCalDavEvents(account, cal, timeMin, timeMax).then(
+          (r) => events.push(...r),
+          (err) => errors.push({ provider: `caldav:${account.displayName}`, message: describe(err) })
+        )
+      );
+    }
   }
 
   await Promise.all(jobs);

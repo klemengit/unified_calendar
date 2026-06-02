@@ -88,6 +88,23 @@
       <p class="saved-note" id="gcal-saved-note"></p>
     </section>
 
+    <!-- CalDAV accounts -->
+    <section class="card">
+      <h2>CalDAV Accounts</h2>
+      <p class="hint">Connect any CalDAV provider (Mailbox.org, Fastmail, etc.) using a username and app password. Credentials are stored server-side only.</p>
+      <div id="caldav-accounts-list"></div>
+      <form id="caldav-add-form" class="caldav-form">
+        <input type="url" id="caldav-server" placeholder="https://dav.mailbox.org" required />
+        <input type="text" id="caldav-username" placeholder="user@mailbox.org" autocomplete="username" required />
+        <input type="password" id="caldav-password" placeholder="App password" autocomplete="current-password" required />
+        <button type="submit" id="caldav-add-btn">Connect</button>
+      </form>
+      <p class="saved-note" id="caldav-add-note"></p>
+    </section>
+
+    <!-- CalDAV sub-calendar sections (one per account, rendered by JS) -->
+    <div id="caldav-cals-sections"></div>
+
     <!-- ICS imports -->
     <section class="card">
       <h2>Imports (ICS subscriptions)</h2>

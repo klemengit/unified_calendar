@@ -26,8 +26,11 @@ const DEFAULT_SETTINGS = {
   },
   // Google sub-calendars selected by the user. Empty = use primary only.
   googleCalendars: [],
+  // CalDAV accounts with credentials and selected calendars.
+  caldavAccounts: [],
 };
 let settings = clone(DEFAULT_SETTINGS);
+let nextCaldavId = 1;
 
 function clone(obj) {
   return JSON.parse(JSON.stringify(obj));
@@ -112,6 +115,9 @@ export function loadSettings() {
       google: { ...DEFAULT_SETTINGS.providers.google, ...saved.providers?.google },
     };
     settings.googleCalendars = Array.isArray(saved.googleCalendars) ? saved.googleCalendars : [];
+    settings.caldavAccounts = Array.isArray(saved.caldavAccounts) ? saved.caldavAccounts : [];
+    nextCaldavId =
+      settings.caldavAccounts.reduce((max, a) => Math.max(max, parseInt(String(a.id).slice(5), 10) || 0), 0) + 1;
   } catch {
     settings = clone(DEFAULT_SETTINGS);
   }
@@ -157,6 +163,61 @@ export function updateGoogleCalendar(id, patch = {}) {
   if (typeof patch.visible === 'boolean') cal.visible = patch.visible;
   persistSettings();
   return cal;
+}
+
+// ── CalDAV accounts ──
+
+export function getCaldavAccounts() {
+  return settings.caldavAccounts || [];
+}
+
+export function getCaldavAccount(id) {
+  return (settings.caldavAccounts || []).find((a) => a.id === id) || null;
+}
+
+export function addCaldavAccount(account) {
+  if (!settings.caldavAccounts) settings.caldavAccounts = [];
+  const id = `cdav_${nextCaldavId++}`;
+  const newAccount = { ...account, id };
+  settings.caldavAccounts.push(newAccount);
+  persistSettings();
+  return newAccount;
+}
+
+export function removeCaldavAccount(id) {
+  settings.caldavAccounts = (settings.caldavAccounts || []).filter((a) => a.id !== id);
+  persistSettings();
+}
+
+/** Replace the calendar list for an account (after selection). */
+export function setCaldavCalendars(accountId, calendars) {
+  const account = (settings.caldavAccounts || []).find((a) => a.id === accountId);
+  if (!account) return null;
+  account.calendars = calendars;
+  persistSettings();
+  return account;
+}
+
+/** Update a single CalDAV calendar's color or visibility by calId. */
+export function updateCaldavCalendar(calId, patch = {}) {
+  for (const account of settings.caldavAccounts || []) {
+    const cal = (account.calendars || []).find((c) => c.id === calId);
+    if (!cal) continue;
+    if (HEX.test(patch.color)) cal.color = patch.color;
+    if (typeof patch.visible === 'boolean') cal.visible = patch.visible;
+    persistSettings();
+    return cal;
+  }
+  return null;
+}
+
+/** Find which account owns a given calId, plus the calendar object. */
+export function findCaldavCalendar(calId) {
+  for (const account of settings.caldavAccounts || []) {
+    const cal = (account.calendars || []).find((c) => c.id === calId);
+    if (cal) return { account, calendar: cal };
+  }
+  return null;
 }
 
 /** Update an OAuth provider's color and/or visibility. */

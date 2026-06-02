@@ -1,6 +1,7 @@
 :root {
   --ms: #2563eb;
   --g: #16a34a;
+  --cdav: #0891b2;
   --bg: #f5f6f8;
   --card: #ffffff;
   --text: #1f2933;
@@ -98,6 +99,7 @@ body {
 }
 .dot.ms, .swatch.ms { background: var(--ms); }
 .dot.g, .swatch.g { background: var(--g); }
+.dot.cdav { background: var(--cdav); }
 .swatch { border-radius: 3px; }
 
 .label { color: var(--muted); }
@@ -449,6 +451,18 @@ button.primary { background: var(--g); color: #fff; border-color: var(--g); }
 button.primary:hover { background: #15803d; border-color: #15803d; }
 button.danger { color: #dc2626; border-color: #fca5a5; background: transparent; }
 button.danger:hover { background: #fee2e2; }
+
+/* ── CalDAV account form (settings page) ── */
+.caldav-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.caldav-form input {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.88rem;
+}
+.caldav-form input#caldav-server { flex: 1 1 200px; }
+.caldav-form input#caldav-username { flex: 1 1 160px; }
+.caldav-form input#caldav-password { flex: 1 1 140px; }
 
 /* ── Google calendars list (settings page) ── */
 .gcal-list {

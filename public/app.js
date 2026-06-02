@@ -328,7 +328,7 @@ async function renderCalendars() {
   for (const cal of calendars) {
     visibility[cal.id] = cal.visible;
 
-    if (cal.kind === 'google-sub' && cal.writeable) {
+    if ((cal.kind === 'google-sub' || cal.kind === 'caldav-sub') && cal.writeable) {
       writeableCals.push({ id: cal.id, name: cal.name });
     }
 
@@ -402,6 +402,13 @@ function webCalUrl(cal) {
 function persistCalendar(cal, patch) {
   if (cal.kind === 'google-sub') {
     return fetch(`/api/google/calendars/${encodeURIComponent(cal.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  }
+  if (cal.kind === 'caldav-sub') {
+    return fetch(`/api/caldav/calendars/${encodeURIComponent(cal.id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -608,7 +615,8 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
   descInput.value  = '';
 
   if (isEdit) {
-    editingEventId = bareGoogleId(event.id);
+    const isCaldav = event.extendedProps.calId?.startsWith('cdav_');
+    editingEventId = isCaldav ? event.extendedProps.caldavEventUid : bareGoogleId(event.id);
     editingCalId   = event.extendedProps.calId;
 
     titleInput.value = event.title || '';
@@ -696,9 +704,25 @@ async function submitEventForm(e) {
     description: document.getElementById('ef-desc').value.trim(),
   };
 
+  const isCaldav = calId.startsWith('cdav_');
+
   try {
     let res;
-    if (editingEventId) {
+    if (isCaldav) {
+      if (editingEventId) {
+        res = await fetch(`/api/caldav/events/${encodeURIComponent(editingEventId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } else {
+        res = await fetch('/api/caldav/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      }
+    } else if (editingEventId) {
       res = await fetch(`/api/google/events/${encodeURIComponent(editingEventId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -715,7 +739,7 @@ async function submitEventForm(e) {
     const data = await res.json();
     if (!res.ok) { showBanner(data.error || 'Failed to save event'); return; }
 
-    if (editingEventId) removeFromCache(`g-${editingEventId}`);
+    if (editingEventId) removeFromCache(isCaldav ? `cdav-${editingEventId}` : `g-${editingEventId}`);
     if (data.event) insertIntoCache(data.event);
     closeEventForm();
     calendar.refetchEvents();
@@ -733,15 +757,24 @@ async function deleteCurrentEvent() {
 
   const btn = document.getElementById('ef-delete');
   btn.disabled = true;
+  const isCaldavDel = editingCalId?.startsWith('cdav_');
   try {
-    const res = await fetch(
-      `/api/google/events/${encodeURIComponent(editingEventId)}?calId=${encodeURIComponent(editingCalId)}`,
-      { method: 'DELETE' }
-    );
+    let res;
+    if (isCaldavDel) {
+      res = await fetch(
+        `/api/caldav/events/${encodeURIComponent(editingEventId)}?calId=${encodeURIComponent(editingCalId)}`,
+        { method: 'DELETE' }
+      );
+    } else {
+      res = await fetch(
+        `/api/google/events/${encodeURIComponent(editingEventId)}?calId=${encodeURIComponent(editingCalId)}`,
+        { method: 'DELETE' }
+      );
+    }
     const data = await res.json();
     if (!res.ok) { showBanner(data.error || 'Failed to delete event'); return; }
 
-    removeFromCache(`g-${editingEventId}`);
+    removeFromCache(isCaldavDel ? `cdav-${editingEventId}` : `g-${editingEventId}`);
     closeEventForm();
     calendar.refetchEvents();
     if (dayCal) dayCal.refetchEvents();
@@ -827,9 +860,8 @@ function openModal(event) {
     openEl.classList.add('hidden');
   }
 
-  // Show Edit button only for writeable Google events
-  const isWriteable = p.calId && p.calId.startsWith('gcal_')
-    && writeableCals.some((c) => c.id === p.calId);
+  // Show Edit button for any writeable calendar (Google or CalDAV)
+  const isWriteable = p.calId && writeableCals.some((c) => c.id === p.calId);
   document.getElementById('modal-edit').classList.toggle('hidden', !isWriteable);
 
   document.getElementById('event-modal').classList.remove('hidden');
