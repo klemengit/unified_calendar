@@ -7,6 +7,8 @@ const staleKeys = new Set(); // keys loaded from localStorage that need backgrou
 const refreshingKeys = new Set(); // keys currently being background-refreshed
 
 const CACHE_KEY = 'calCache_v1';
+const PREFETCH_PAST_DAYS = 14;
+const PREFETCH_FUTURE_MONTHS = 6;
 let lastSyncedTime = null;
 let bgSyncTimer = null;
 
@@ -29,9 +31,10 @@ function loadPersistedCache() {
 function savePersistentCache() {
   try {
     const entries = {};
-    // Keep at most 12 entries to stay within localStorage quota
-    const keys = [...eventCache.keys()];
-    for (const k of keys.slice(Math.max(0, keys.length - 12))) entries[k] = eventCache.get(k);
+    // Sort by range duration descending so the large pre-fetch block is always saved first
+    const dur = (k) => { const sep = k.indexOf('|'); return sep < 0 ? 0 : new Date(k.slice(sep + 1)) - new Date(k.slice(0, sep)); };
+    const keys = [...eventCache.keys()].sort((a, b) => dur(b) - dur(a));
+    for (const k of keys.slice(0, 12)) entries[k] = eventCache.get(k);
     localStorage.setItem(CACHE_KEY, JSON.stringify({ version: 1, lastSynced: lastSyncedTime, entries }));
   } catch { /* quota exceeded — ignore */ }
 }
@@ -73,21 +76,80 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateLastSyncedDisplay();
   setInterval(updateLastSyncedDisplay, 60000);
   document.getElementById('sync-btn').addEventListener('click', syncNow);
+  prefetchLargeWindow();
 });
 
+// ── Pre-fetch helpers ──
+
+function getPrefetchRange() {
+  const start = new Date();
+  start.setDate(start.getDate() - PREFETCH_PAST_DAYS);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setMonth(end.getMonth() + PREFETCH_FUTURE_MONTHS + 1);
+  end.setDate(0); // last day of the 6th future month
+  end.setHours(23, 59, 59, 999);
+  return { startStr: start.toISOString(), endStr: end.toISOString() };
+}
+
+function filterToRange(events, startStr, endStr) {
+  const rs = new Date(startStr).getTime();
+  const re = new Date(endStr).getTime();
+  return events.filter((e) => {
+    const es = new Date(e.start).getTime();
+    const ee = e.end ? new Date(e.end).getTime() : es + 1;
+    return ee > rs && es < re;
+  });
+}
+
+function findSupersetKey(startStr, endStr) {
+  const rs = new Date(startStr).getTime();
+  const re = new Date(endStr).getTime();
+  for (const key of eventCache.keys()) {
+    const sep = key.indexOf('|');
+    if (sep < 0) continue;
+    if (new Date(key.slice(0, sep)).getTime() <= rs && new Date(key.slice(sep + 1)).getTime() >= re) return key;
+  }
+  return null;
+}
+
+async function prefetchLargeWindow() {
+  const { startStr, endStr } = getPrefetchRange();
+  const superKey = findSupersetKey(startStr, endStr);
+  if (superKey && !staleKeys.has(superKey) && !refreshingKeys.has(superKey)) return;
+  await refreshInBackground(`${startStr}|${endStr}`, startStr, endStr);
+}
+
 // ── Event loading ──
-// Returns cached events immediately if available, and kicks off a silent
-// background refresh for entries that were loaded from persistent storage.
 
 async function loadEvents(info) {
   const key = `${info.startStr}|${info.endStr}`;
-  let all = eventCache.get(key);
-  if (!all) {
-    all = await fetchFromApi(key, info.startStr, info.endStr);
-  } else if (staleKeys.has(key)) {
-    staleKeys.delete(key);
-    refreshInBackground(key, info.startStr, info.endStr);
+
+  // Exact cache hit
+  const cached = eventCache.get(key);
+  if (cached) {
+    if (staleKeys.has(key)) {
+      staleKeys.delete(key);
+      refreshInBackground(key, info.startStr, info.endStr);
+    }
+    return cached.filter((e) => visibility[e.calId] !== false);
   }
+
+  // Superset hit — derive subset instantly without a network request
+  const superKey = findSupersetKey(info.startStr, info.endStr);
+  if (superKey !== null) {
+    const subset = filterToRange(eventCache.get(superKey), info.startStr, info.endStr);
+    eventCache.set(key, subset);
+    if (staleKeys.has(superKey)) {
+      staleKeys.delete(superKey);
+      const sep = superKey.indexOf('|');
+      refreshInBackground(superKey, superKey.slice(0, sep), superKey.slice(sep + 1));
+    }
+    return subset.filter((e) => visibility[e.calId] !== false);
+  }
+
+  // Nothing cached — fetch from API
+  const all = await fetchFromApi(key, info.startStr, info.endStr);
   return all.filter((e) => visibility[e.calId] !== false);
 }
 
@@ -111,6 +173,15 @@ async function refreshInBackground(key, startStr, endStr) {
     if (data.errors?.length) showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
     else hideBanner();
     eventCache.set(key, data.events || []);
+    // Invalidate derived subset entries so they're re-derived from fresh data on next access
+    const rs = new Date(startStr).getTime();
+    const re = new Date(endStr).getTime();
+    for (const k of [...eventCache.keys()]) {
+      if (k === key) continue;
+      const sep = k.indexOf('|');
+      if (sep < 0) continue;
+      if (new Date(k.slice(0, sep)).getTime() >= rs && new Date(k.slice(sep + 1)).getTime() <= re) eventCache.delete(k);
+    }
     updateLastSynced();
     if (calendar) calendar.refetchEvents();
     if (dayCal) dayCal.refetchEvents();
@@ -125,15 +196,14 @@ function setupBackgroundSync(intervalMinutes) {
   bgSyncTimer = null;
   if (!intervalMinutes) return;
   bgSyncTimer = setInterval(() => {
-    // Mark all cached entries stale; the current view range will refresh
-    // immediately on the next refetchEvents call.
     for (const key of eventCache.keys()) {
       if (!refreshingKeys.has(key)) staleKeys.add(key);
     }
-    if (calendar) {
-      calendar.refetchEvents();
-      if (dayCal) dayCal.refetchEvents();
-    }
+    // Re-fetch the large window; refetchEvents is called when it completes
+    prefetchLargeWindow();
+    // Also immediately refetch current view in case it falls outside the pre-fetch window
+    if (calendar) calendar.refetchEvents();
+    if (dayCal) dayCal.refetchEvents();
   }, intervalMinutes * 60 * 1000);
 }
 
@@ -325,10 +395,12 @@ async function syncNow() {
   btn.disabled = true;
   eventCache.clear();
   staleKeys.clear();
+  refreshingKeys.clear();
   try { localStorage.removeItem(CACHE_KEY); } catch {}
   await Promise.all([renderCalendars(), renderStatus()]);
   calendar.refetchEvents();
   if (dayCal) dayCal.refetchEvents();
+  prefetchLargeWindow();
   setTimeout(() => {
     btn.classList.remove('spinning');
     btn.disabled = false;
