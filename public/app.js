@@ -277,6 +277,7 @@ function setupJumpTo() {
     opt.textContent = y;
     yearSel.appendChild(opt);
   }
+  yearSel.value = currentYear;
 
   monthSel.addEventListener('change', () =>
     calendar.gotoDate(new Date(parseInt(yearSel.value), parseInt(monthSel.value), 1))
