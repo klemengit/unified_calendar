@@ -136,7 +136,7 @@ async function loadGoogleCalendars() {
 }
 
 async function saveGoogleCalendars() {
-  const checks = document.querySelectorAll('.gcal-check:checked');
+  const checks = document.querySelectorAll('#google-cals-list .gcal-check:checked');
   const calendars = [...checks].map((c) => {
     const nameInput = c.closest('li')?.querySelector('.gcal-name-input');
     return {
