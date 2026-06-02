@@ -2,12 +2,9 @@ import axios from 'axios';
 import { config } from './config.js';
 import { fetchIcsEvents } from './ics.js';
 
-// Colors used to distinguish event sources in the UI.
-export const COLORS = { microsoft: '#2563eb', google: '#16a34a' }; // blue / green
+export const COLORS = { microsoft: '#2563eb', google: '#16a34a' };
 
 // ── Token refresh ──────────────────────────────────────────────
-// Access tokens expire after ~1 hour. If we have a refresh token we silently
-// trade it for a fresh access token so the user doesn't have to log in again.
 
 async function refreshMicrosoft(token) {
   const url = `https://login.microsoftonline.com/${config.microsoft.tenant}/oauth2/v2.0/token`;
@@ -38,10 +35,96 @@ async function refreshGoogle(token) {
   return token;
 }
 
-async function ensureFresh(provider, token) {
+export async function ensureFresh(provider, token) {
   const stillValid = token.expiresAt && Date.now() < token.expiresAt - 60_000;
   if (stillValid || !token.refreshToken) return token;
   return provider === 'microsoft' ? refreshMicrosoft(token) : refreshGoogle(token);
+}
+
+// ── Google Calendar helpers ────────────────────────────────────
+
+function addOneDayToDateStr(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d + 1);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function buildGCalBody({ title, start, end, allDay, description, location }) {
+  if (allDay) {
+    // end from client is inclusive; Google needs exclusive (add 1 day)
+    return {
+      summary: title,
+      description: description || '',
+      location: location || '',
+      start: { date: start },
+      end: { date: addOneDayToDateStr(end || start) },
+    };
+  }
+  return {
+    summary: title,
+    description: description || '',
+    location: location || '',
+    start: { dateTime: start },
+    end: { dateTime: end || start },
+  };
+}
+
+function googleEventToUnified(e, calId, googleId, color) {
+  return {
+    id: `g-${e.id}`,
+    title: e.summary || '(no title)',
+    start: e.start.dateTime || e.start.date,
+    end: e.end.dateTime || e.end.date,
+    allDay: Boolean(e.start.date),
+    color,
+    calId,
+    gcalendarId: googleId,
+    googleEventId: e.id,
+    source: 'Google',
+    originalUrl: e.htmlLink || null,
+    location: e.location || '',
+    description: (e.description || '').trim(),
+  };
+}
+
+export async function listGoogleCalendars(token) {
+  const { data } = await axios.get(
+    'https://www.googleapis.com/calendar/v3/users/me/calendarList',
+    { headers: { Authorization: `Bearer ${token.accessToken}` }, params: { maxResults: 250 } }
+  );
+  return (data.items || []).map((c) => ({
+    googleId: c.id,
+    id: `gcal_${c.id}`,
+    name: c.summary || c.id,
+    backgroundColor: c.backgroundColor || COLORS.google,
+    accessRole: c.accessRole,
+  }));
+}
+
+export async function createGoogleEvent(token, calId, googleId, color, eventData) {
+  const { data } = await axios.post(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleId)}/events`,
+    buildGCalBody(eventData),
+    { headers: { Authorization: `Bearer ${token.accessToken}` } }
+  );
+  return googleEventToUnified(data, calId, googleId, color);
+}
+
+export async function updateGoogleEvent(token, calId, googleId, color, eventId, eventData) {
+  const { data } = await axios.put(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleId)}/events/${encodeURIComponent(eventId)}`,
+    buildGCalBody(eventData),
+    { headers: { Authorization: `Bearer ${token.accessToken}` } }
+  );
+  return googleEventToUnified(data, calId, googleId, color);
+}
+
+export async function deleteGoogleEvent(token, googleId, eventId) {
+  await axios.delete(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleId)}/events/${encodeURIComponent(eventId)}`,
+    { headers: { Authorization: `Bearer ${token.accessToken}` } }
+  );
 }
 
 // ── Event fetching ─────────────────────────────────────────────
@@ -65,7 +148,6 @@ async function fetchMicrosoftEvents(token, timeMin, timeMax, color) {
   return (data.value || []).map((e) => ({
     id: `ms-${e.id}`,
     title: e.subject || '(no title)',
-    // Graph returns UTC (we asked for it); append Z so JS parses it as UTC.
     start: e.isAllDay ? e.start.dateTime.slice(0, 10) : `${e.start.dateTime}Z`,
     end: e.isAllDay ? e.end.dateTime.slice(0, 10) : `${e.end.dateTime}Z`,
     allDay: e.isAllDay,
@@ -78,49 +160,39 @@ async function fetchMicrosoftEvents(token, timeMin, timeMax, color) {
   }));
 }
 
-async function fetchGoogleEvents(token, timeMin, timeMax, color) {
-  const url = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+async function fetchGoogleCalendarEvents(token, calId, googleId, timeMin, timeMax, color) {
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleId)}/events`;
   const { data } = await axios.get(url, {
     headers: { Authorization: `Bearer ${token.accessToken}` },
     params: {
       timeMin,
       timeMax,
-      singleEvents: true, // expand recurring events into instances
+      singleEvents: true,
       orderBy: 'startTime',
       maxResults: 250,
     },
   });
 
-  return (data.items || []).map((e) => ({
-    id: `g-${e.id}`,
-    title: e.summary || '(no title)',
-    start: e.start.dateTime || e.start.date, // dateTime for timed, date for all-day
-    end: e.end.dateTime || e.end.date,
-    allDay: Boolean(e.start.date),
-    color,
-    calId: 'google',
-    source: 'Google',
-    originalUrl: e.htmlLink || null,
-    location: e.location || '',
-    description: (e.description || '').trim(),
-  }));
+  return (data.items || []).map((e) => googleEventToUnified(e, calId, googleId, color));
 }
 
-/**
- * Fetch and merge events from every connected provider in the session.
- * Returns { events, errors } so one failing provider doesn't hide the other.
- */
-export async function getUnifiedEvents(session, timeMin, timeMax, icsFeeds = [], providers = {}) {
+// ── Unified fetch ──────────────────────────────────────────────
+
+export async function getUnifiedEvents(
+  session,
+  timeMin,
+  timeMax,
+  icsFeeds = [],
+  providers = {},
+  googleCalendars = []
+) {
   const tokens = session.tokens || {};
   const ms = providers.microsoft || { color: COLORS.microsoft, visible: true };
   const g = providers.google || { color: COLORS.google, visible: true };
   const events = [];
   const errors = [];
-
   const jobs = [];
-  // We fetch every connected calendar regardless of visibility: the client
-  // caches the full set per date range and filters show/hide locally, so
-  // toggling is instant. `visible` is only persisted for restoring UI state.
+
   if (tokens.microsoft) {
     jobs.push(
       (async () => {
@@ -132,19 +204,27 @@ export async function getUnifiedEvents(session, timeMin, timeMax, icsFeeds = [],
       )
     );
   }
+
   if (tokens.google) {
-    jobs.push(
-      (async () => {
-        const fresh = await ensureFresh('google', tokens.google);
-        return fetchGoogleEvents(fresh, timeMin, timeMax, g.color);
-      })().then(
-        (r) => events.push(...r),
-        (err) => errors.push({ provider: 'google', message: describe(err) })
-      )
-    );
+    const cals =
+      googleCalendars.length > 0
+        ? googleCalendars
+        : [{ id: 'gcal_primary', googleId: 'primary', color: g.color }];
+
+    for (const cal of cals) {
+      const color = cal.color || g.color;
+      jobs.push(
+        (async () => {
+          const fresh = await ensureFresh('google', tokens.google);
+          return fetchGoogleCalendarEvents(fresh, cal.id, cal.googleId, timeMin, timeMax, color);
+        })().then(
+          (r) => events.push(...r),
+          (err) => errors.push({ provider: cal.id, message: describe(err) })
+        )
+      );
+    }
   }
 
-  // ICS subscriptions (no login required).
   for (const feed of icsFeeds) {
     jobs.push(
       fetchIcsEvents(feed, timeMin, timeMax).then(

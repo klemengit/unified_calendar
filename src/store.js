@@ -24,6 +24,8 @@ const DEFAULT_SETTINGS = {
     microsoft: { color: '#2563eb', visible: true },
     google: { color: '#16a34a', visible: true },
   },
+  // Google sub-calendars selected by the user. Empty = use primary only.
+  googleCalendars: [],
 };
 let settings = clone(DEFAULT_SETTINGS);
 
@@ -109,6 +111,7 @@ export function loadSettings() {
       microsoft: { ...DEFAULT_SETTINGS.providers.microsoft, ...saved.providers?.microsoft },
       google: { ...DEFAULT_SETTINGS.providers.google, ...saved.providers?.google },
     };
+    settings.googleCalendars = Array.isArray(saved.googleCalendars) ? saved.googleCalendars : [];
   } catch {
     settings = clone(DEFAULT_SETTINGS);
   }
@@ -131,6 +134,29 @@ export function updateSettings(patch = {}) {
   settings = next;
   persistSettings();
   return settings;
+}
+
+// ── Google sub-calendars ──
+
+export function getGoogleCalendars() {
+  return settings.googleCalendars || [];
+}
+
+/** Replace the entire saved Google calendar list and persist. */
+export function setGoogleCalendars(list) {
+  settings.googleCalendars = list;
+  persistSettings();
+  return settings.googleCalendars;
+}
+
+/** Update a single Google calendar's color or visibility by its calId. */
+export function updateGoogleCalendar(id, patch = {}) {
+  const cal = (settings.googleCalendars || []).find((c) => c.id === id);
+  if (!cal) return null;
+  if (HEX.test(patch.color)) cal.color = patch.color;
+  if (typeof patch.visible === 'boolean') cal.visible = patch.visible;
+  persistSettings();
+  return cal;
 }
 
 /** Update an OAuth provider's color and/or visibility. */

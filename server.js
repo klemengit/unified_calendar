@@ -8,7 +8,15 @@ import {
   isMicrosoftConfigured,
 } from './src/config.js';
 import passport from './src/passport.js';
-import { getUnifiedEvents } from './src/calendar.js';
+import {
+  getUnifiedEvents,
+  ensureFresh,
+  listGoogleCalendars,
+  createGoogleEvent,
+  updateGoogleEvent,
+  deleteGoogleEvent,
+  COLORS,
+} from './src/calendar.js';
 import {
   loadFeeds,
   getFeeds,
@@ -21,18 +29,18 @@ import {
   getSettings,
   updateSettings,
   updateProvider,
+  getGoogleCalendars,
+  setGoogleCalendars,
+  updateGoogleCalendar,
 } from './src/store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json());
 
-// Load persisted ICS subscriptions and settings from disk on startup.
 loadFeeds();
 loadSettings();
 
-// A small palette assigned to ICS feeds in order (after the reserved
-// blue=Outlook / green=Google).
 const ICS_PALETTE = ['#9333ea', '#ea580c', '#0891b2', '#db2777', '#ca8a04'];
 
 app.use(
@@ -46,7 +54,6 @@ app.use(
 app.use(passport.initialize());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Remember where to send the user after the OAuth round-trip.
 const rememberReturn = (req, res, next) => {
   req.session.returnTo = req.query.return === 'settings' ? '/settings.html' : '/';
   next();
@@ -80,7 +87,7 @@ app.get(
   rememberReturn,
   passport.authenticate('google', {
     session: false,
-    accessType: 'offline', // request a refresh token
+    accessType: 'offline',
     prompt: 'consent select_account',
   })
 );
@@ -113,7 +120,7 @@ app.get('/api/me', (req, res) => {
   });
 });
 
-// ── Settings (persisted to disk) ──
+// ── Settings ──
 app.get('/api/settings', (req, res) => {
   res.json(getSettings());
 });
@@ -122,20 +129,117 @@ app.put('/api/settings', (req, res) => {
   res.json(updateSettings(req.body || {}));
 });
 
-// Per-provider color + visibility (Outlook / Google).
 app.put('/api/providers/:provider', (req, res) => {
   const result = updateProvider(req.params.provider, req.body || {});
   if (!result) return res.status(404).json({ error: 'Unknown provider' });
   res.json(result);
 });
 
-// ── Calendars list ──
-// Unified list of "calendars" (connected OAuth providers + ICS feeds) used by
-// the sidebar to show/hide and recolor each source.
+// ── Google sub-calendar list (for settings page) ──
+app.get('/api/google/calendars', async (req, res) => {
+  if (!req.session.tokens?.google) return res.status(401).json({ error: 'Not connected to Google' });
+  try {
+    const fresh = await ensureFresh('google', req.session.tokens.google);
+    const allCals = await listGoogleCalendars(fresh);
+    const saved = getGoogleCalendars();
+    const savedIds = new Set(saved.map((c) => c.googleId));
+    const calendars = allCals.map((c) => ({ ...c, selected: savedIds.has(c.googleId) }));
+    res.json({ calendars });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save which Google calendars to sync (replaces entire list)
+app.put('/api/google/calendars', (req, res) => {
+  const HEX = /^#[0-9a-fA-F]{6}$/;
+  const list = (req.body.calendars || []).map((c) => ({
+    id: `gcal_${c.googleId}`,
+    googleId: c.googleId,
+    name: c.name || c.googleId,
+    color: HEX.test(c.color) ? c.color : (c.backgroundColor || COLORS.google),
+    visible: true,
+  }));
+  res.json(setGoogleCalendars(list));
+});
+
+// Update a single Google calendar's color / visibility (from sidebar)
+app.patch('/api/google/calendars/:id', (req, res) => {
+  const result = updateGoogleCalendar(decodeURIComponent(req.params.id), req.body || {});
+  if (!result) return res.status(404).json({ error: 'Unknown calendar' });
+  res.json(result);
+});
+
+// ── Google event CRUD ──
+
+function googleIdFromCalId(calId) {
+  return calId.startsWith('gcal_') ? calId.slice(5) : calId;
+}
+
+function getGoogleCalColor(calId) {
+  const cal = getGoogleCalendars().find((c) => c.id === calId);
+  return cal?.color || COLORS.google;
+}
+
+function googleWriteError(err) {
+  if (err.response?.status === 403)
+    return { status: 403, message: 'Google Calendar write access denied. Reconnect Google in Settings.' };
+  return { status: 500, message: err.message };
+}
+
+app.post('/api/google/events', async (req, res) => {
+  if (!req.session.tokens?.google) return res.status(401).json({ error: 'Google not connected' });
+  const { calId, title, start, end, allDay, location, description } = req.body || {};
+  if (!calId || !title || !start) return res.status(400).json({ error: 'calId, title and start are required' });
+  try {
+    const fresh = await ensureFresh('google', req.session.tokens.google);
+    const googleId = googleIdFromCalId(calId);
+    const color = getGoogleCalColor(calId);
+    const event = await createGoogleEvent(fresh, calId, googleId, color, { title, start, end, allDay, location, description });
+    res.status(201).json({ event });
+  } catch (err) {
+    const { status, message } = googleWriteError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.put('/api/google/events/:eventId', async (req, res) => {
+  if (!req.session.tokens?.google) return res.status(401).json({ error: 'Google not connected' });
+  const { calId, title, start, end, allDay, location, description } = req.body || {};
+  if (!calId || !title || !start) return res.status(400).json({ error: 'calId, title and start are required' });
+  try {
+    const fresh = await ensureFresh('google', req.session.tokens.google);
+    const googleId = googleIdFromCalId(calId);
+    const color = getGoogleCalColor(calId);
+    const event = await updateGoogleEvent(fresh, calId, googleId, color, req.params.eventId, { title, start, end, allDay, location, description });
+    res.json({ event });
+  } catch (err) {
+    const { status, message } = googleWriteError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.delete('/api/google/events/:eventId', async (req, res) => {
+  if (!req.session.tokens?.google) return res.status(401).json({ error: 'Google not connected' });
+  const { calId } = req.query;
+  if (!calId) return res.status(400).json({ error: 'calId query param required' });
+  try {
+    const fresh = await ensureFresh('google', req.session.tokens.google);
+    const googleId = googleIdFromCalId(calId);
+    await deleteGoogleEvent(fresh, googleId, req.params.eventId);
+    res.json({ ok: true });
+  } catch (err) {
+    const { status, message } = googleWriteError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+// ── Calendars list (sidebar) ──
 app.get('/api/calendars', (req, res) => {
   const tokens = req.session.tokens || {};
   const { providers } = getSettings();
   const calendars = [];
+
   if (tokens.microsoft) {
     calendars.push({
       id: 'microsoft',
@@ -145,15 +249,34 @@ app.get('/api/calendars', (req, res) => {
       visible: providers.microsoft.visible !== false,
     });
   }
+
   if (tokens.google) {
-    calendars.push({
-      id: 'google',
-      kind: 'provider',
-      name: tokens.google.email || tokens.google.name || 'Google',
-      color: providers.google.color,
-      visible: providers.google.visible !== false,
-    });
+    const gcals = getGoogleCalendars();
+    if (gcals.length) {
+      for (const gc of gcals) {
+        calendars.push({
+          id: gc.id,
+          kind: 'google-sub',
+          name: gc.name,
+          color: gc.color,
+          visible: gc.visible !== false,
+          googleId: gc.googleId,
+          writeable: true,
+        });
+      }
+    } else {
+      calendars.push({
+        id: 'gcal_primary',
+        kind: 'google-sub',
+        name: tokens.google.email || tokens.google.name || 'Google',
+        color: providers.google.color,
+        visible: providers.google.visible !== false,
+        googleId: 'primary',
+        writeable: true,
+      });
+    }
   }
+
   for (const f of getFeeds()) {
     const u = f.url || '';
     const webCalBase = u.includes('calendar.google.com') ? 'google'
@@ -161,10 +284,11 @@ app.get('/api/calendars', (req, res) => {
       : null;
     calendars.push({ id: f.id, kind: 'ics', name: f.name, color: f.color, visible: f.visible !== false, webCalBase });
   }
+
   res.json({ calendars });
 });
 
-// ── ICS subscriptions (no login, persisted to disk) ──
+// ── ICS subscriptions ──
 app.get('/api/ics', (req, res) => {
   res.json({ feeds: publicFeeds() });
 });
@@ -174,7 +298,6 @@ app.post('/api/ics', (req, res) => {
   if (!url || !/^https?:\/\//i.test(url) && !/^webcal:\/\//i.test(url)) {
     return res.status(400).json({ error: 'Provide a valid http(s):// or webcal:// .ics URL' });
   }
-  // webcal:// is just http(s):// for fetching purposes.
   const normalizedUrl = url.replace(/^webcal:\/\//i, 'https://');
   const color = ICS_PALETTE[feedCount() % ICS_PALETTE.length];
   const feed = addFeed({ url: normalizedUrl, name: (name || '').trim() || 'ICS feed', color });
@@ -193,7 +316,6 @@ app.delete('/api/ics/:id', (req, res) => {
 });
 
 // ── Unified events ──
-// FullCalendar calls this with ?start=...&end=... (ISO) for the visible range.
 app.get('/api/events', async (req, res) => {
   const now = new Date();
   const timeMin = req.query.start || new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
@@ -210,7 +332,8 @@ app.get('/api/events', async (req, res) => {
       timeMin,
       timeMax,
       getFeeds(),
-      getSettings().providers
+      getSettings().providers,
+      getGoogleCalendars()
     );
     res.json(result);
   } catch (err) {
@@ -218,7 +341,7 @@ app.get('/api/events', async (req, res) => {
   }
 });
 
-// Disconnect one provider or all.
+// ── Logout ──
 app.post('/logout', express.json(), (req, res) => {
   const provider = req.query.provider;
   if (provider && req.session.tokens) {

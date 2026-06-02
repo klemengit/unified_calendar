@@ -1,16 +1,22 @@
 let calendar;
 let dayCal;
 let settings = {};
-const eventCache = new Map(); // "startStr|endStr" -> events[]
-const visibility = {}; // calId -> boolean (false = hidden)
-const staleKeys = new Set(); // keys loaded from localStorage that need background refresh
-const refreshingKeys = new Set(); // keys currently being background-refreshed
+const eventCache = new Map();
+const visibility = {};
+const staleKeys = new Set();
+const refreshingKeys = new Set();
 
-const CACHE_KEY = 'calCache_v1';
+const CACHE_KEY = 'calCache_v2';
 const PREFETCH_PAST_DAYS = 14;
 const PREFETCH_FUTURE_MONTHS = 6;
 let lastSyncedTime = null;
 let bgSyncTimer = null;
+
+// State for the create/edit form
+let editingEventId = null;  // bare Google event ID (no 'g-' prefix), null when creating
+let editingCalId = null;    // calId like 'gcal_primary' of the event being edited
+let currentModalEvent = null; // FullCalendar event shown in the detail modal
+let writeableCals = [];     // [{ id: 'gcal_primary', name: 'My Calendar' }]
 
 // ── Persistent cache ──
 
@@ -31,12 +37,11 @@ function loadPersistedCache() {
 function savePersistentCache() {
   try {
     const entries = {};
-    // Sort by range duration descending so the large pre-fetch block is always saved first
     const dur = (k) => { const sep = k.indexOf('|'); return sep < 0 ? 0 : new Date(k.slice(sep + 1)) - new Date(k.slice(0, sep)); };
     const keys = [...eventCache.keys()].sort((a, b) => dur(b) - dur(a));
     for (const k of keys.slice(0, 12)) entries[k] = eventCache.get(k);
     localStorage.setItem(CACHE_KEY, JSON.stringify({ version: 1, lastSynced: lastSyncedTime, entries }));
-  } catch { /* quota exceeded — ignore */ }
+  } catch { /* quota exceeded */ }
 }
 
 function updateLastSynced() {
@@ -63,8 +68,6 @@ function updateLastSyncedDisplay() {
 document.addEventListener('DOMContentLoaded', async () => {
   showOAuthError();
   settings = await fetch('/api/settings').then((r) => r.json());
-  // Populate cache from localStorage before first render so FullCalendar gets
-  // cached data immediately on load, then background-refreshes stale entries.
   loadPersistedCache();
   await renderCalendars();
   initCalendar();
@@ -87,7 +90,7 @@ function getPrefetchRange() {
   start.setHours(0, 0, 0, 0);
   const end = new Date();
   end.setMonth(end.getMonth() + PREFETCH_FUTURE_MONTHS + 1);
-  end.setDate(0); // last day of the 6th future month
+  end.setDate(0);
   end.setHours(23, 59, 59, 999);
   return { startStr: start.toISOString(), endStr: end.toISOString() };
 }
@@ -125,7 +128,6 @@ async function prefetchLargeWindow() {
 async function loadEvents(info) {
   const key = `${info.startStr}|${info.endStr}`;
 
-  // Exact cache hit
   const cached = eventCache.get(key);
   if (cached) {
     if (staleKeys.has(key)) {
@@ -135,7 +137,6 @@ async function loadEvents(info) {
     return cached.filter((e) => visibility[e.calId] !== false);
   }
 
-  // Superset hit — derive subset instantly without a network request
   const superKey = findSupersetKey(info.startStr, info.endStr);
   if (superKey !== null) {
     const subset = filterToRange(eventCache.get(superKey), info.startStr, info.endStr);
@@ -148,7 +149,6 @@ async function loadEvents(info) {
     return subset.filter((e) => visibility[e.calId] !== false);
   }
 
-  // Nothing cached — fetch from API
   const all = await fetchFromApi(key, info.startStr, info.endStr);
   return all.filter((e) => visibility[e.calId] !== false);
 }
@@ -173,7 +173,6 @@ async function refreshInBackground(key, startStr, endStr) {
     if (data.errors?.length) showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
     else hideBanner();
     eventCache.set(key, data.events || []);
-    // Invalidate derived subset entries so they're re-derived from fresh data on next access
     const rs = new Date(startStr).getTime();
     const re = new Date(endStr).getTime();
     for (const k of [...eventCache.keys()]) {
@@ -199,9 +198,7 @@ function setupBackgroundSync(intervalMinutes) {
     for (const key of eventCache.keys()) {
       if (!refreshingKeys.has(key)) staleKeys.add(key);
     }
-    // Re-fetch the large window; refetchEvents is called when it completes
     prefetchLargeWindow();
-    // Also immediately refetch current view in case it falls outside the pre-fetch window
     if (calendar) calendar.refetchEvents();
     if (dayCal) dayCal.refetchEvents();
   }, intervalMinutes * 60 * 1000);
@@ -232,13 +229,24 @@ function initCalendar() {
     contentHeight: 'auto',
     nowIndicator: true,
     dayMaxEvents: true,
+    selectable: true,
+    unselectAuto: true,
     events: (info, success, failure) => loadEvents(info).then(success, failure),
     eventClick: (info) => {
       info.jsEvent.preventDefault();
       openModal(info.event);
     },
+    select: (info) => {
+      openEventForm({ start: info.start, end: info.end, allDay: info.allDay });
+      calendar.unselect();
+    },
     dateClick: (info) => {
-      if (calendar.view.type === 'dayGridMonth') openDayModal(info.date);
+      if (calendar.view.type === 'dayGridMonth') {
+        openDayModal(info.date);
+      } else {
+        const end = info.allDay ? info.date : new Date(info.date.getTime() + 3600000);
+        openEventForm({ start: info.date, end, allDay: info.allDay });
+      }
     },
     datesSet: () => {
       applyZoom();
@@ -287,7 +295,7 @@ function syncJumpToSelectors() {
   yearSel.value = d.getFullYear();
 }
 
-// ── Connection chips (read-only) ──
+// ── Connection chips ──
 
 async function renderStatus() {
   const me = await fetch('/api/me').then((r) => r.json());
@@ -300,18 +308,29 @@ async function renderStatus() {
   el.innerHTML = chips.join('') || '<span class="chip muted">No account connected — open Settings</span>';
 }
 
-// ── Calendars sidebar: per-calendar color + show/hide ──
+// ── Calendars sidebar ──
 
 async function renderCalendars() {
   const { calendars } = await fetch('/api/calendars').then((r) => r.json());
   const list = document.getElementById('calendars');
   list.innerHTML = '';
+  writeableCals = [];
+
+  const newBtn = document.getElementById('new-event-btn');
+
   if (!calendars.length) {
     list.innerHTML = '<li class="muted">No calendars yet — add accounts or ICS feeds in Settings.</li>';
+    if (newBtn) newBtn.classList.add('hidden');
     return;
   }
+
   for (const cal of calendars) {
     visibility[cal.id] = cal.visible;
+
+    if (cal.kind === 'google-sub' && cal.writeable) {
+      writeableCals.push({ id: cal.id, name: cal.name });
+    }
+
     const li = document.createElement('li');
     li.className = 'cal-item';
     li.innerHTML = `
@@ -319,11 +338,13 @@ async function renderCalendars() {
       <input type="color" class="cal-color" value="${cal.color}" title="Change color" />
       <span class="cal-name ${cal.visible ? '' : 'muted'}">${esc(cal.name)}</span>`;
 
-    if (cal.id === 'google' || cal.id === 'microsoft') {
+    const showOpenBtn = cal.kind === 'google-sub' || cal.id === 'microsoft'
+      || (cal.kind === 'ics' && cal.webCalBase);
+    if (showOpenBtn) {
       const btn = document.createElement('button');
       btn.className = 'cal-open-btn';
       btn.textContent = '↗';
-      btn.title = `Open in ${cal.id === 'google' ? 'Google Calendar' : 'Outlook'}`;
+      btn.title = `Open in ${(cal.kind === 'google-sub' || cal.webCalBase === 'google') ? 'Google Calendar' : 'Outlook'}`;
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const url = webCalUrl(cal);
@@ -339,6 +360,21 @@ async function renderCalendars() {
       recolorCalendar(cal, e.target.value)
     );
     list.appendChild(li);
+  }
+
+  if (newBtn) newBtn.classList.toggle('hidden', writeableCals.length === 0);
+  populateCalendarSelector();
+}
+
+function populateCalendarSelector() {
+  const sel = document.getElementById('ef-cal');
+  if (!sel) return;
+  sel.innerHTML = '';
+  for (const cal of writeableCals) {
+    const opt = document.createElement('option');
+    opt.value = cal.id;
+    opt.textContent = cal.name;
+    sel.appendChild(opt);
   }
 }
 
@@ -358,11 +394,18 @@ function providerUrl(provider) {
 }
 
 function webCalUrl(cal) {
-  const isGoogle = cal.id === 'google' || cal.webCalBase === 'google';
+  const isGoogle = cal.kind === 'google-sub' || cal.webCalBase === 'google';
   return providerUrl(isGoogle ? 'google' : 'outlook');
 }
 
 function persistCalendar(cal, patch) {
+  if (cal.kind === 'google-sub') {
+    return fetch(`/api/google/calendars/${encodeURIComponent(cal.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  }
   const url = cal.kind === 'provider' ? `/api/providers/${cal.id}` : `/api/ics/${cal.id}`;
   const method = cal.kind === 'provider' ? 'PUT' : 'PATCH';
   return fetch(url, {
@@ -389,7 +432,33 @@ function recolorCalendar(cal, color) {
   calendar.refetchEvents();
 }
 
-// ── Sync: clear cache and pull fresh data ──
+// ── Cache mutation helpers ──
+
+function insertIntoCache(event) {
+  const es = new Date(event.start).getTime();
+  for (const [key, events] of eventCache.entries()) {
+    const sep = key.indexOf('|');
+    if (sep < 0) continue;
+    const rs = new Date(key.slice(0, sep)).getTime();
+    const re = new Date(key.slice(sep + 1)).getTime();
+    if (es >= rs && es < re) {
+      const filtered = events.filter((e) => e.id !== event.id);
+      filtered.push(event);
+      eventCache.set(key, filtered);
+    }
+  }
+  savePersistentCache();
+}
+
+function removeFromCache(eventId) {
+  for (const [key, events] of eventCache.entries()) {
+    const filtered = events.filter((e) => e.id !== eventId);
+    if (filtered.length !== events.length) eventCache.set(key, filtered);
+  }
+  savePersistentCache();
+}
+
+// ── Sync ──
 
 async function syncNow() {
   const btn = document.getElementById('sync-btn');
@@ -409,7 +478,7 @@ async function syncNow() {
   }, 500);
 }
 
-// ── Ctrl + scroll to zoom time slots (week/day views) ──
+// ── Ctrl + scroll zoom ──
 
 const SLOT_MIN = 14, SLOT_MAX = 90;
 let slotPx = parseInt(localStorage.getItem('slotPx') || '0', 10) || 0;
@@ -450,22 +519,239 @@ function setupZoom() {
   );
 }
 
-// ── Modals (event details + day view) ──
+// ── Modals setup ──
 
 function setupModals() {
+  // Event detail modal
   const eventOverlay = document.getElementById('event-modal');
-  const dayOverlay = document.getElementById('day-modal');
-  const closeEvent = () => eventOverlay.classList.add('hidden');
-  const closeDay = () => dayOverlay.classList.add('hidden');
+  const closeDetail = () => eventOverlay.classList.add('hidden');
+  document.getElementById('modal-close').onclick = closeDetail;
+  eventOverlay.addEventListener('click', (e) => { if (e.target === eventOverlay) closeDetail(); });
+  document.getElementById('modal-edit').onclick = () => {
+    closeDetail();
+    if (currentModalEvent) openEventForm({ event: currentModalEvent });
+  };
 
-  document.getElementById('modal-close').onclick = closeEvent;
+  // Day-view modal
+  const dayOverlay = document.getElementById('day-modal');
+  const closeDay = () => dayOverlay.classList.add('hidden');
   document.getElementById('day-modal-close').onclick = closeDay;
-  eventOverlay.addEventListener('click', (e) => { if (e.target === eventOverlay) closeEvent(); });
   dayOverlay.addEventListener('click', (e) => { if (e.target === dayOverlay) closeDay(); });
+
+  // Event form modal
+  const formOverlay = document.getElementById('event-form-modal');
+  document.getElementById('ef-close').onclick = closeEventForm;
+  document.getElementById('ef-cancel').onclick = closeEventForm;
+  formOverlay.addEventListener('click', (e) => { if (e.target === formOverlay) closeEventForm(); });
+  document.getElementById('ef-allday').addEventListener('change', () => {
+    applyAllDayMode(document.getElementById('ef-allday').checked);
+  });
+  document.getElementById('ef-form').addEventListener('submit', submitEventForm);
+  document.getElementById('ef-delete').addEventListener('click', deleteCurrentEvent);
+
+  // New event button
+  const newBtn = document.getElementById('new-event-btn');
+  if (newBtn) newBtn.addEventListener('click', () => openEventForm({}));
+
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeEvent(); closeDay(); }
+    if (e.key === 'Escape') {
+      closeDetail();
+      closeDay();
+      closeEventForm();
+    }
   });
 }
+
+// ── Event form helpers ──
+
+function applyAllDayMode(allDay) {
+  const startInput = document.getElementById('ef-start');
+  const endInput = document.getElementById('ef-end');
+  if (allDay) {
+    const sv = startInput.value ? startInput.value.slice(0, 10) : '';
+    const ev = endInput.value ? endInput.value.slice(0, 10) : '';
+    startInput.type = 'date';
+    endInput.type = 'date';
+    startInput.value = sv;
+    endInput.value = ev;
+  } else {
+    const sv = startInput.value ? `${startInput.value}T09:00` : '';
+    const ev = endInput.value ? `${endInput.value}T10:00` : '';
+    startInput.type = 'datetime-local';
+    endInput.type = 'datetime-local';
+    startInput.value = sv;
+    endInput.value = ev;
+  }
+}
+
+function openEventForm({ start = null, end = null, allDay = false, event = null }) {
+  if (writeableCals.length === 0) {
+    showBanner('Connect Google Calendar to create events (or reconnect with full access in Settings).');
+    return;
+  }
+
+  const isEdit = event !== null;
+  document.getElementById('ef-heading').textContent = isEdit ? 'Edit event' : 'New event';
+  document.getElementById('ef-delete').classList.toggle('hidden', !isEdit);
+
+  const titleInput = document.getElementById('ef-title');
+  const startInput = document.getElementById('ef-start');
+  const endInput   = document.getElementById('ef-end');
+  const alldayChk  = document.getElementById('ef-allday');
+  const calSel     = document.getElementById('ef-cal');
+  const locInput   = document.getElementById('ef-loc');
+  const descInput  = document.getElementById('ef-desc');
+
+  titleInput.value = '';
+  locInput.value   = '';
+  descInput.value  = '';
+
+  if (isEdit) {
+    editingEventId = bareGoogleId(event.id);
+    editingCalId   = event.extendedProps.calId;
+
+    titleInput.value = event.title || '';
+    locInput.value   = event.extendedProps.location || '';
+    descInput.value  = event.extendedProps.description || '';
+    alldayChk.checked = event.allDay;
+
+    if (event.allDay) {
+      startInput.type = 'date';
+      endInput.type   = 'date';
+      startInput.value = toLocalYmd(event.start);
+      const inclEnd = event.end ? new Date(event.end.getTime() - 86400000) : event.start;
+      endInput.value = toLocalYmd(inclEnd);
+    } else {
+      startInput.type = 'datetime-local';
+      endInput.type   = 'datetime-local';
+      startInput.value = toDatetimeLocal(event.start);
+      endInput.value   = event.end
+        ? toDatetimeLocal(event.end)
+        : toDatetimeLocal(new Date(event.start.getTime() + 3600000));
+    }
+    calSel.value    = editingCalId;
+    calSel.disabled = true;
+  } else {
+    editingEventId = null;
+    editingCalId   = null;
+
+    alldayChk.checked = allDay;
+    if (allDay) {
+      startInput.type = 'date';
+      endInput.type   = 'date';
+      startInput.value = start ? toLocalYmd(start) : '';
+      // For a multi-day drag: end is exclusive, show inclusive last day
+      endInput.value = (end && end > start)
+        ? toLocalYmd(new Date(end.getTime() - 86400000))
+        : (start ? toLocalYmd(start) : '');
+    } else {
+      startInput.type = 'datetime-local';
+      endInput.type   = 'datetime-local';
+      startInput.value = start ? toDatetimeLocal(start) : '';
+      endInput.value   = end
+        ? toDatetimeLocal(end)
+        : (start ? toDatetimeLocal(new Date(start.getTime() + 3600000)) : '');
+    }
+    calSel.disabled = false;
+    if (calSel.options.length > 0) calSel.selectedIndex = 0;
+  }
+
+  document.getElementById('event-form-modal').classList.remove('hidden');
+  titleInput.focus();
+}
+
+function closeEventForm() {
+  document.getElementById('event-form-modal').classList.add('hidden');
+  editingEventId = null;
+  editingCalId   = null;
+}
+
+async function submitEventForm(e) {
+  e.preventDefault();
+  const btn = document.getElementById('ef-save');
+  btn.disabled = true;
+
+  const allDay     = document.getElementById('ef-allday').checked;
+  const startInput = document.getElementById('ef-start');
+  const endInput   = document.getElementById('ef-end');
+  const calId      = editingCalId || document.getElementById('ef-cal').value;
+
+  let start, end;
+  if (allDay) {
+    start = startInput.value;
+    end   = endInput.value || startInput.value;
+  } else {
+    start = new Date(startInput.value).toISOString();
+    end   = new Date(endInput.value || startInput.value).toISOString();
+  }
+
+  const body = {
+    calId,
+    title: document.getElementById('ef-title').value.trim(),
+    start,
+    end,
+    allDay,
+    location:    document.getElementById('ef-loc').value.trim(),
+    description: document.getElementById('ef-desc').value.trim(),
+  };
+
+  try {
+    let res;
+    if (editingEventId) {
+      res = await fetch(`/api/google/events/${encodeURIComponent(editingEventId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } else {
+      res = await fetch('/api/google/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
+
+    const data = await res.json();
+    if (!res.ok) { showBanner(data.error || 'Failed to save event'); return; }
+
+    if (editingEventId) removeFromCache(`g-${editingEventId}`);
+    if (data.event) insertIntoCache(data.event);
+    closeEventForm();
+    calendar.refetchEvents();
+    if (dayCal) dayCal.refetchEvents();
+  } catch (err) {
+    showBanner('Error saving event: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function deleteCurrentEvent() {
+  const title = document.getElementById('ef-title').value || 'this event';
+  if (!confirm(`Delete "${title}"?`)) return;
+
+  const btn = document.getElementById('ef-delete');
+  btn.disabled = true;
+  try {
+    const res = await fetch(
+      `/api/google/events/${encodeURIComponent(editingEventId)}?calId=${encodeURIComponent(editingCalId)}`,
+      { method: 'DELETE' }
+    );
+    const data = await res.json();
+    if (!res.ok) { showBanner(data.error || 'Failed to delete event'); return; }
+
+    removeFromCache(`g-${editingEventId}`);
+    closeEventForm();
+    calendar.refetchEvents();
+    if (dayCal) dayCal.refetchEvents();
+  } catch (err) {
+    showBanner('Error deleting event: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Day-view modal ──
 
 function openDayModal(date) {
   const overlay = document.getElementById('day-modal');
@@ -484,10 +770,22 @@ function openDayModal(date) {
       height: 460,
       eventTimeFormat: timeFmt(),
       slotLabelFormat: timeFmt(),
+      selectable: true,
       events: (info, success, failure) => loadEvents(info).then(success, failure),
       eventClick: (info) => {
         info.jsEvent.preventDefault();
+        overlay.classList.add('hidden');
         openModal(info.event);
+      },
+      select: (info) => {
+        overlay.classList.add('hidden');
+        openEventForm({ start: info.start, end: info.end, allDay: info.allDay });
+        dayCal.unselect();
+      },
+      dateClick: (info) => {
+        overlay.classList.add('hidden');
+        const end = info.allDay ? info.date : new Date(info.date.getTime() + 3600000);
+        openEventForm({ start: info.date, end, allDay: info.allDay });
       },
     });
     dayCal.render();
@@ -501,7 +799,10 @@ function openDayModal(date) {
   }, 0);
 }
 
+// ── Event detail modal ──
+
 function openModal(event) {
+  currentModalEvent = event;
   const p = event.extendedProps;
   const color = event.backgroundColor || p.color || '#666';
   document.getElementById('modal-title').textContent = event.title;
@@ -518,13 +819,17 @@ function openModal(event) {
   descEl.classList.toggle('hidden', !p.description);
 
   const openEl = document.getElementById('modal-open');
-  const originalUrl = event.extendedProps.originalUrl;
-  if (originalUrl) {
-    openEl.href = originalUrl;
+  if (p.originalUrl) {
+    openEl.href = p.originalUrl;
     openEl.classList.remove('hidden');
   } else {
     openEl.classList.add('hidden');
   }
+
+  // Show Edit button only for writeable Google events
+  const isWriteable = p.calId && p.calId.startsWith('gcal_')
+    && writeableCals.some((c) => c.id === p.calId);
+  document.getElementById('modal-edit').classList.toggle('hidden', !isWriteable);
 
   document.getElementById('event-modal').classList.remove('hidden');
 }
@@ -548,6 +853,22 @@ function formatEventTime(event) {
     ? end.toLocaleTimeString([], tOpts)
     : end.toLocaleDateString([], dOpts) + ', ' + end.toLocaleTimeString([], tOpts);
   return `${startStr} – ${endStr}`;
+}
+
+// ── Date/time helpers ──
+
+function toDatetimeLocal(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function toLocalYmd(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function bareGoogleId(fcId) {
+  return fcId.startsWith('g-') ? fcId.slice(2) : fcId;
 }
 
 // ── Helpers ──

@@ -42,6 +42,7 @@
     <aside class="sidebar">
       <h2>Calendars</h2>
       <ul id="calendars" class="cal-list"></ul>
+      <button class="new-event-btn hidden" id="new-event-btn">+ New event</button>
       <div class="provider-links">
         <button class="provider-link-btn" id="open-google">Google Calendar ↗</button>
         <button class="provider-link-btn" id="open-outlook">Outlook ↗</button>
@@ -64,6 +65,7 @@
       <div class="modal-row" id="modal-location"></div>
       <div class="modal-desc" id="modal-description"></div>
       <a class="modal-open" id="modal-open" href="#" target="_blank" rel="noopener">Open original ↗</a>
+      <button class="modal-edit hidden" id="modal-edit">Edit</button>
     </div>
   </div>
 
@@ -73,6 +75,51 @@
       <button class="modal-close" id="day-modal-close" aria-label="Close">✕</button>
       <h3 id="day-modal-title"></h3>
       <div id="day-calendar"></div>
+    </div>
+  </div>
+
+  <!-- Event create / edit form modal -->
+  <div id="event-form-modal" class="modal-overlay hidden">
+    <div class="modal event-form" role="dialog" aria-modal="true" aria-labelledby="ef-heading">
+      <button class="modal-close" id="ef-close" aria-label="Close">✕</button>
+      <h3 id="ef-heading">New event</h3>
+      <form id="ef-form">
+        <div class="form-field">
+          <label for="ef-title">Title</label>
+          <input type="text" id="ef-title" placeholder="Event title" autocomplete="off" required />
+        </div>
+        <div class="form-field form-field-row">
+          <label for="ef-allday">All day</label>
+          <input type="checkbox" id="ef-allday" />
+        </div>
+        <div class="form-field">
+          <label for="ef-start">Start</label>
+          <input type="datetime-local" id="ef-start" required />
+        </div>
+        <div class="form-field">
+          <label for="ef-end">End</label>
+          <input type="datetime-local" id="ef-end" />
+        </div>
+        <div class="form-field">
+          <label for="ef-cal">Calendar</label>
+          <select id="ef-cal"></select>
+        </div>
+        <div class="form-field">
+          <label for="ef-loc">Location</label>
+          <input type="text" id="ef-loc" placeholder="Optional" autocomplete="off" />
+        </div>
+        <div class="form-field">
+          <label for="ef-desc">Description</label>
+          <textarea id="ef-desc" rows="3" placeholder="Optional"></textarea>
+        </div>
+        <div class="ef-actions">
+          <button type="button" id="ef-delete" class="danger hidden">Delete</button>
+          <div class="ef-actions-right">
+            <button type="button" id="ef-cancel">Cancel</button>
+            <button type="submit" id="ef-save" class="primary">Save</button>
+          </div>
+        </div>
+      </form>
     </div>
   </div>
 

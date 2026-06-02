@@ -75,6 +75,19 @@
       </div>
     </section>
 
+    <!-- Google sub-calendars (shown when Google is connected) -->
+    <section class="card hidden" id="google-cals-section">
+      <h2>Google Calendars</h2>
+      <p class="hint">Choose which of your Google calendars to display. Each appears separately in the sidebar with its own color toggle.</p>
+      <p class="hint">To create or edit events, you must <strong>reconnect Google</strong> after saving — the app now needs write access.</p>
+      <div id="google-cals-loading" class="muted">Loading…</div>
+      <ul id="google-cals-list" class="gcal-list hidden"></ul>
+      <div class="gcal-actions">
+        <button id="google-cals-save" class="primary hidden">Save selection</button>
+      </div>
+      <p class="saved-note" id="gcal-saved-note"></p>
+    </section>
+
     <!-- ICS imports -->
     <section class="card">
       <h2>Imports (ICS subscriptions)</h2>

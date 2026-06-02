@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ICS.
   document.getElementById('ics-form').addEventListener('submit', addIcsFeed);
+
+  // Google calendars.
+  document.getElementById('google-cals-save').addEventListener('click', saveGoogleCalendars);
 });
 
 // ── Preferences ──
@@ -61,6 +64,11 @@ async function loadAccounts() {
   applyProvider('google', me.configured.google, me.connected.google, {
     statusEl: 'g-status', connectEl: 'g-connect', disconnectEl: 'g-disconnect', defaultLabel: 'Google',
   });
+  if (me.connected.google) {
+    loadGoogleCalendars();
+  } else {
+    document.getElementById('google-cals-section').classList.add('hidden');
+  }
 }
 
 function applyProvider(provider, configured, connected, els) {
@@ -92,6 +100,56 @@ function applyProvider(provider, configured, connected, els) {
 async function disconnect(provider) {
   await fetch(`/logout?provider=${provider}`, { method: 'POST' });
   loadAccounts();
+}
+
+// ── Google sub-calendars ──
+
+async function loadGoogleCalendars() {
+  const section = document.getElementById('google-cals-section');
+  section.classList.remove('hidden');
+  try {
+    const { calendars } = await fetch('/api/google/calendars').then((r) => r.json());
+    const list = document.getElementById('google-cals-list');
+    list.innerHTML = '';
+    for (const cal of calendars) {
+      const li = document.createElement('li');
+      li.className = 'gcal-item';
+      li.innerHTML = `
+        <input type="checkbox" class="gcal-check" ${cal.selected ? 'checked' : ''}
+               data-google-id="${esc(cal.googleId)}"
+               data-name="${esc(cal.name)}"
+               data-color="${esc(cal.backgroundColor)}" />
+        <span class="swatch" style="background:${esc(cal.backgroundColor)};width:14px;height:14px;border-radius:3px;flex-shrink:0"></span>
+        <span class="gcal-name">${esc(cal.name)}</span>
+        <span class="muted" style="font-size:0.78rem">${esc(cal.accessRole)}</span>`;
+      list.appendChild(li);
+    }
+    document.getElementById('google-cals-loading').classList.add('hidden');
+    list.classList.remove('hidden');
+    document.getElementById('google-cals-save').classList.remove('hidden');
+  } catch {
+    document.getElementById('google-cals-loading').textContent = 'Failed to load calendars.';
+  }
+}
+
+async function saveGoogleCalendars() {
+  const checks = document.querySelectorAll('.gcal-check:checked');
+  const calendars = [...checks].map((c) => ({
+    googleId: c.dataset.googleId,
+    name: c.dataset.name,
+    color: c.dataset.color,
+  }));
+  const res = await fetch('/api/google/calendars', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ calendars }),
+  });
+  if (res.ok) {
+    const note = document.getElementById('gcal-saved-note');
+    note.textContent = '✓ Saved — reload the main calendar to see changes';
+    clearTimeout(note._t);
+    note._t = setTimeout(() => (note.textContent = ''), 4000);
+  }
 }
 
 // ── ICS feeds ──
