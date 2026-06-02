@@ -39,6 +39,8 @@ import {
   setCaldavCalendars,
   updateCaldavCalendar,
   findCaldavCalendar,
+  getTokens,
+  saveTokens,
 } from './src/store.js';
 import {
   discoverCalendars,
@@ -67,6 +69,15 @@ app.use(
 app.use(passport.initialize());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Restore OAuth tokens from disk when the session is fresh (e.g. after a restart).
+app.use((req, res, next) => {
+  if (!req.session.tokens || !Object.keys(req.session.tokens).length) {
+    const saved = getTokens();
+    if (Object.keys(saved).length) req.session.tokens = { ...saved };
+  }
+  next();
+});
+
 const rememberReturn = (req, res, next) => {
   req.session.returnTo = req.query.return === 'settings' ? '/settings.html' : '/';
   next();
@@ -74,6 +85,7 @@ const rememberReturn = (req, res, next) => {
 const finishAuth = (req, res) => {
   const dest = req.session.returnTo || '/';
   delete req.session.returnTo;
+  if (req.session.tokens) saveTokens(req.session.tokens);
   res.redirect(dest);
 };
 const failTo = (req) => `${req.session.returnTo || '/'}?error=`;
@@ -148,11 +160,22 @@ app.put('/api/providers/:provider', (req, res) => {
   res.json(result);
 });
 
+// Refresh a provider token and persist it so the new access token survives restarts.
+async function freshToken(provider, req) {
+  const token = req.session.tokens[provider];
+  const refreshed = await ensureFresh(provider, token);
+  if (refreshed !== token || refreshed.accessToken !== token.accessToken) {
+    req.session.tokens[provider] = refreshed;
+    saveTokens(req.session.tokens);
+  }
+  return refreshed;
+}
+
 // ── Google sub-calendar list (for settings page) ──
 app.get('/api/google/calendars', async (req, res) => {
   if (!req.session.tokens?.google) return res.status(401).json({ error: 'Not connected to Google' });
   try {
-    const fresh = await ensureFresh('google', req.session.tokens.google);
+    const fresh = await freshToken('google', req);
     const allCals = await listGoogleCalendars(fresh);
     const saved = getGoogleCalendars();
     const savedIds = new Set(saved.map((c) => c.googleId));
@@ -205,7 +228,7 @@ app.post('/api/google/events', async (req, res) => {
   const { calId, title, start, end, allDay, location, description } = req.body || {};
   if (!calId || !title || !start) return res.status(400).json({ error: 'calId, title and start are required' });
   try {
-    const fresh = await ensureFresh('google', req.session.tokens.google);
+    const fresh = await freshToken('google', req);
     const googleId = googleIdFromCalId(calId);
     const color = getGoogleCalColor(calId);
     const event = await createGoogleEvent(fresh, calId, googleId, color, { title, start, end, allDay, location, description });
@@ -221,7 +244,7 @@ app.put('/api/google/events/:eventId', async (req, res) => {
   const { calId, title, start, end, allDay, location, description } = req.body || {};
   if (!calId || !title || !start) return res.status(400).json({ error: 'calId, title and start are required' });
   try {
-    const fresh = await ensureFresh('google', req.session.tokens.google);
+    const fresh = await freshToken('google', req);
     const googleId = googleIdFromCalId(calId);
     const color = getGoogleCalColor(calId);
     const event = await updateGoogleEvent(fresh, calId, googleId, color, req.params.eventId, { title, start, end, allDay, location, description });
@@ -237,7 +260,7 @@ app.delete('/api/google/events/:eventId', async (req, res) => {
   const { calId } = req.query;
   if (!calId) return res.status(400).json({ error: 'calId query param required' });
   try {
-    const fresh = await ensureFresh('google', req.session.tokens.google);
+    const fresh = await freshToken('google', req);
     const googleId = googleIdFromCalId(calId);
     await deleteGoogleEvent(fresh, googleId, req.params.eventId);
     res.json({ ok: true });
@@ -497,6 +520,8 @@ app.get('/api/events', async (req, res) => {
       getGoogleCalendars(),
       getCaldavAccounts()
     );
+    // Tokens may have been silently refreshed inside getUnifiedEvents — persist them.
+    if (req.session.tokens) saveTokens(req.session.tokens);
     res.json(result);
   } catch (err) {
     res.status(500).json({ events: [], errors: [{ provider: 'server', message: err.message }] });
@@ -508,9 +533,13 @@ app.post('/logout', express.json(), (req, res) => {
   const provider = req.query.provider;
   if (provider && req.session.tokens) {
     delete req.session.tokens[provider];
+    saveTokens(req.session.tokens);
     return res.json({ ok: true });
   }
-  req.session.destroy(() => res.json({ ok: true }));
+  req.session.destroy(() => {
+    saveTokens({});
+    res.json({ ok: true });
+  });
 });
 
 app.listen(config.port, () => {

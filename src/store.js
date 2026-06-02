@@ -28,6 +28,8 @@ const DEFAULT_SETTINGS = {
   googleCalendars: [],
   // CalDAV accounts with credentials and selected calendars.
   caldavAccounts: [],
+  // Persisted OAuth tokens so Google/Microsoft survive server restarts.
+  savedTokens: {},
 };
 let settings = clone(DEFAULT_SETTINGS);
 let nextCaldavId = 1;
@@ -88,10 +90,11 @@ export function removeFeed(id) {
   if (feeds.length !== before) persist();
 }
 
-/** Update a feed's color and/or visibility. Returns the public (url-less) feed. */
+/** Update a feed's name, color, and/or visibility. Returns the public (url-less) feed. */
 export function updateFeed(id, patch = {}) {
   const feed = feeds.find((f) => f.id === id);
   if (!feed) return null;
+  if (typeof patch.name === 'string' && patch.name.trim()) feed.name = patch.name.trim();
   if (HEX.test(patch.color)) feed.color = patch.color;
   if (typeof patch.visible === 'boolean') feed.visible = patch.visible;
   persist();
@@ -116,6 +119,7 @@ export function loadSettings() {
     };
     settings.googleCalendars = Array.isArray(saved.googleCalendars) ? saved.googleCalendars : [];
     settings.caldavAccounts = Array.isArray(saved.caldavAccounts) ? saved.caldavAccounts : [];
+    settings.savedTokens = saved.savedTokens && typeof saved.savedTokens === 'object' ? saved.savedTokens : {};
     nextCaldavId =
       settings.caldavAccounts.reduce((max, a) => Math.max(max, parseInt(String(a.id).slice(5), 10) || 0), 0) + 1;
   } catch {
@@ -155,10 +159,11 @@ export function setGoogleCalendars(list) {
   return settings.googleCalendars;
 }
 
-/** Update a single Google calendar's color or visibility by its calId. */
+/** Update a single Google calendar's name, color, or visibility by its calId. */
 export function updateGoogleCalendar(id, patch = {}) {
   const cal = (settings.googleCalendars || []).find((c) => c.id === id);
   if (!cal) return null;
+  if (typeof patch.name === 'string' && patch.name.trim()) cal.name = patch.name.trim();
   if (HEX.test(patch.color)) cal.color = patch.color;
   if (typeof patch.visible === 'boolean') cal.visible = patch.visible;
   persistSettings();
@@ -198,17 +203,31 @@ export function setCaldavCalendars(accountId, calendars) {
   return account;
 }
 
-/** Update a single CalDAV calendar's color or visibility by calId. */
+/** Update a single CalDAV calendar's name, color, or visibility by calId. */
 export function updateCaldavCalendar(calId, patch = {}) {
   for (const account of settings.caldavAccounts || []) {
     const cal = (account.calendars || []).find((c) => c.id === calId);
     if (!cal) continue;
+    if (typeof patch.name === 'string' && patch.name.trim()) cal.name = patch.name.trim();
     if (HEX.test(patch.color)) cal.color = patch.color;
     if (typeof patch.visible === 'boolean') cal.visible = patch.visible;
     persistSettings();
     return cal;
   }
   return null;
+}
+
+// ── OAuth token persistence ──
+
+/** Return the last-saved OAuth tokens (survives server restarts). */
+export function getTokens() {
+  return settings.savedTokens || {};
+}
+
+/** Persist the current OAuth tokens so they survive restarts. */
+export function saveTokens(tokens) {
+  settings.savedTokens = tokens && typeof tokens === 'object' ? { ...tokens } : {};
+  persistSettings();
 }
 
 /** Find which account owns a given calId, plus the calendar object. */

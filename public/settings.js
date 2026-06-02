@@ -121,10 +121,9 @@ async function loadGoogleCalendars() {
       li.innerHTML = `
         <input type="checkbox" class="gcal-check" ${cal.selected ? 'checked' : ''}
                data-google-id="${esc(cal.googleId)}"
-               data-name="${esc(cal.name)}"
                data-color="${esc(cal.backgroundColor)}" />
         <span class="swatch" style="background:${esc(cal.backgroundColor)};width:14px;height:14px;border-radius:3px;flex-shrink:0"></span>
-        <span class="gcal-name">${esc(cal.name)}</span>
+        <input type="text" class="gcal-name-input" value="${esc(cal.name)}" title="Rename calendar" />
         <span class="muted" style="font-size:0.78rem">${esc(cal.accessRole)}</span>`;
       list.appendChild(li);
     }
@@ -138,11 +137,14 @@ async function loadGoogleCalendars() {
 
 async function saveGoogleCalendars() {
   const checks = document.querySelectorAll('.gcal-check:checked');
-  const calendars = [...checks].map((c) => ({
-    googleId: c.dataset.googleId,
-    name: c.dataset.name,
-    color: c.dataset.color,
-  }));
+  const calendars = [...checks].map((c) => {
+    const nameInput = c.closest('li')?.querySelector('.gcal-name-input');
+    return {
+      googleId: c.dataset.googleId,
+      name: (nameInput?.value || '').trim() || c.dataset.googleId,
+      color: c.dataset.color,
+    };
+  });
   const res = await fetch('/api/google/calendars', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -170,8 +172,20 @@ async function loadIcsFeeds() {
     const li = document.createElement('li');
     li.innerHTML = `
       <span class="swatch" style="background:${f.color}"></span>
-      <span class="ics-name">${esc(f.name)}</span>
+      <input type="text" class="ics-name-input" value="${esc(f.name)}" title="Rename feed" />
       <button class="ics-remove" title="Remove">✕</button>`;
+    const nameInput = li.querySelector('.ics-name-input');
+    nameInput.addEventListener('blur', () => {
+      const name = nameInput.value.trim();
+      if (name && name !== f.name) {
+        f.name = name;
+        fetch(`/api/ics/${f.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+      }
+    });
     li.querySelector('.ics-remove').onclick = () => removeIcsFeed(f.id);
     list.appendChild(li);
   }
@@ -254,9 +268,9 @@ function renderCaldavCalSection(account) {
     <li class="gcal-item">
       <input type="checkbox" class="gcal-check" ${cal.selected ? 'checked' : ''}
              data-cal-id="${esc(cal.id)}" data-url="${esc(cal.url)}"
-             data-name="${esc(cal.name)}" data-color="${esc(cal.color || '#0891b2')}" />
+             data-color="${esc(cal.color || '#0891b2')}" />
       <span class="swatch" style="background:${esc(cal.color || '#0891b2')};width:14px;height:14px;border-radius:3px;flex-shrink:0"></span>
-      <span class="gcal-name">${esc(cal.name)}</span>
+      <input type="text" class="gcal-name-input" value="${esc(cal.name)}" title="Rename calendar" />
     </li>`).join('');
 
   section.innerHTML = `
@@ -310,13 +324,16 @@ async function addCaldavAccount(e) {
 async function saveCaldavCalendars(accountId) {
   const section = document.querySelector(`[data-account-id="${accountId}"]`);
   const checks = section.querySelectorAll('.gcal-check');
-  const calendars = [...checks].map((c) => ({
-    id: c.dataset.calId,
-    url: c.dataset.url,
-    name: c.dataset.name,
-    color: c.dataset.color,
-    selected: c.checked,
-  }));
+  const calendars = [...section.querySelectorAll('.gcal-check')].map((c) => {
+    const nameInput = c.closest('li')?.querySelector('.gcal-name-input');
+    return {
+      id: c.dataset.calId,
+      url: c.dataset.url,
+      name: (nameInput?.value || '').trim() || c.dataset.calId,
+      color: c.dataset.color,
+      selected: c.checked,
+    };
+  });
   const res = await fetch(`/api/caldav/accounts/${accountId}/calendars`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
