@@ -948,6 +948,14 @@ function esc(s) {
 
 // ── Search ──
 
+const QUICK_JUMPS = [
+  { label: 'Today',      key: 'today' },
+  { label: 'This week',  key: 'this week' },
+  { label: 'Next week',  key: 'next week' },
+  { label: 'This month', key: 'this month' },
+  { label: 'Next month', key: 'next month' },
+];
+
 let searchSelIdx = -1;
 
 function setupSearch() {
@@ -989,9 +997,9 @@ function openSearch() {
   const input = document.getElementById('search-input');
   overlay.classList.remove('hidden');
   input.value = '';
-  document.getElementById('search-results').innerHTML = '';
   searchSelIdx = -1;
   input.focus();
+  runSearch('');
 }
 
 function closeSearch() {
@@ -1003,23 +1011,43 @@ function highlightSearch(items) {
   items[searchSelIdx]?.scrollIntoView({ block: 'nearest' });
 }
 
+function makeJumpItem(label, date) {
+  const li = document.createElement('li');
+  li.className = 'search-item search-item-date';
+  const dateLabel = date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  li.innerHTML = `
+    <span class="search-item-icon">📅</span>
+    <span class="search-item-content">
+      <span class="search-item-title">${esc(label)}</span>
+      <span class="search-item-meta">${esc(dateLabel)}</span>
+    </span>`;
+  li.addEventListener('click', () => { calendar.gotoDate(date); closeSearch(); });
+  return li;
+}
+
 function runSearch(raw) {
   const query = raw.trim();
   const results = document.getElementById('search-results');
   results.innerHTML = '';
   searchSelIdx = -1;
 
-  if (!query) return;
+  if (!query) {
+    for (const { label, key } of QUICK_JUMPS) {
+      const date = parseSearchDate(key);
+      if (date) results.appendChild(makeJumpItem(label, date));
+    }
+    if (results.children.length > 0) {
+      searchSelIdx = 0;
+      results.children[0].classList.add('selected');
+    }
+    return;
+  }
 
   // Date-jump result
   const date = parseSearchDate(query);
   if (date) {
-    const li = document.createElement('li');
-    li.className = 'search-item search-item-date';
     const label = date.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    li.innerHTML = `<span class="search-item-icon">📅</span><span class="search-item-label">Jump to ${esc(label)}</span>`;
-    li.addEventListener('click', () => { calendar.gotoDate(date); closeSearch(); });
-    results.appendChild(li);
+    results.appendChild(makeJumpItem(`Jump to ${label}`, date));
   }
 
   // Event search (min 2 chars)
@@ -1041,8 +1069,11 @@ function runSearch(raw) {
         }
       }
     }
-    matches.sort((a, b) => new Date(a.start) - new Date(b.start));
-    for (const e of matches.slice(0, 50)) {
+    const now = new Date();
+    const upcoming = matches.filter(e => new Date(e.start) >= now).sort((a, b) => new Date(a.start) - new Date(b.start));
+    const past = matches.filter(e => new Date(e.start) < now).sort((a, b) => new Date(b.start) - new Date(a.start));
+
+    const appendEventItem = (e) => {
       const li = document.createElement('li');
       li.className = 'search-item search-item-event';
       const color = e.color || '#888';
@@ -1055,19 +1086,36 @@ function runSearch(raw) {
           <span class="search-item-title">${esc(e.title || '(no title)')}</span>
           <span class="search-item-meta">${esc(dateStr)} · ${timeStr}${e.source ? ' · ' + esc(e.source) : ''}</span>
         </span>`;
-      li.addEventListener('click', () => { closeSearch(); openRawEventModal(e, startDate); });
+      li.addEventListener('click', () => { closeSearch(); openRawEventModal(e, new Date(e.start)); });
       results.appendChild(li);
+    };
+
+    if (upcoming.length > 0 || past.length > 0) {
+      if (date) {
+        const sep = document.createElement('li');
+        sep.className = 'search-divider';
+        results.appendChild(sep);
+      }
+      upcoming.slice(0, 50).forEach(appendEventItem);
+      if (past.length > 0) {
+        const label = document.createElement('li');
+        label.className = 'search-section-label';
+        label.textContent = 'Past events';
+        results.appendChild(label);
+        past.slice(0, 50).forEach(appendEventItem);
+      }
     }
   }
 
-  if (results.children.length === 0) {
+  const first = results.querySelector('.search-item');
+  if (first) {
+    searchSelIdx = 0;
+    first.classList.add('selected');
+  } else if (query.length >= 2) {
     const li = document.createElement('li');
     li.className = 'search-empty';
     li.textContent = 'No results';
     results.appendChild(li);
-  } else {
-    searchSelIdx = 0;
-    results.children[0].classList.add('selected');
   }
 }
 

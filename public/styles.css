@@ -533,6 +533,16 @@ button.danger:hover { background: #fee2e2; }
   text-overflow: ellipsis;
 }
 .search-item-label { font-size: 0.9rem; }
+.search-divider { height: 1px; background: var(--border); margin: 4px 0; }
+.search-section-label {
+  padding: 8px 16px 3px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
 .search-empty { padding: 12px 16px; color: var(--muted); font-size: 0.88rem; }
 .search-hint {
   padding: 7px 16px;
