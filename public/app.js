@@ -18,6 +18,15 @@ let editingCalId = null;    // calId like 'gcal_primary' of the event being edit
 let currentModalEvent = null; // FullCalendar event shown in the detail modal
 let writeableCals = [];     // [{ id: 'gcal_primary', name: 'My Calendar' }]
 
+function contrastColor(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const lin = (c) => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return L > 0.179 ? '#000000' : '#ffffff';
+}
+
 // ── Persistent cache ──
 
 function loadPersistedCache() {
@@ -158,7 +167,10 @@ async function fetchFromApi(key, startStr, endStr) {
   const data = await fetch(`/api/events?${params}`).then((r) => r.json());
   if (data.errors?.length) showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
   else hideBanner();
-  const events = data.events || [];
+  const events = (data.events || []).map((e) => ({
+    ...e,
+    textColor: contrastColor(e.color || '#666666'),
+  }));
   eventCache.set(key, events);
   updateLastSynced();
   return events;
@@ -172,7 +184,10 @@ async function refreshInBackground(key, startStr, endStr) {
     const data = await fetch(`/api/events?${params}`).then((r) => r.json());
     if (data.errors?.length) showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
     else hideBanner();
-    eventCache.set(key, data.events || []);
+    eventCache.set(key, (data.events || []).map((e) => ({
+      ...e,
+      textColor: contrastColor(e.color || '#666666'),
+    })));
     const rs = new Date(startStr).getTime();
     const re = new Date(endStr).getTime();
     for (const k of [...eventCache.keys()]) {
@@ -433,8 +448,9 @@ function toggleCalendar(cal, visible, li) {
 function recolorCalendar(cal, color) {
   cal.color = color;
   persistCalendar(cal, { color });
+  const tc = contrastColor(color);
   for (const list of eventCache.values()) {
-    for (const e of list) if (e.calId === cal.id) e.color = color;
+    for (const e of list) if (e.calId === cal.id) { e.color = color; e.textColor = tc; }
   }
   savePersistentCache();
   calendar.refetchEvents();
@@ -443,6 +459,7 @@ function recolorCalendar(cal, color) {
 // ── Cache mutation helpers ──
 
 function insertIntoCache(event) {
+  if (!event.textColor) event.textColor = contrastColor(event.color || '#666666');
   const es = new Date(event.start).getTime();
   for (const [key, events] of eventCache.entries()) {
     const sep = key.indexOf('|');
