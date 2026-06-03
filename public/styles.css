@@ -16,6 +16,10 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .topbar {
@@ -133,10 +137,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   font-size: 0.9rem;
 }
 
-main { padding: 20px 24px; flex: 1; min-width: 0; }
+main { padding: 20px 24px; flex: 1; min-width: 0; overflow-y: auto; height: 100%; }
 
 /* ── Layout: calendars sidebar + calendar ── */
-.layout { display: flex; align-items: flex-start; }
+.layout { display: flex; align-items: flex-start; flex: 1; min-height: 0; overflow: hidden; }
 
 .sidebar {
   width: 230px;
@@ -204,7 +208,9 @@ main { padding: 20px 24px; flex: 1; min-width: 0; }
 }
 
 @media (max-width: 720px) {
-  .layout { flex-direction: column; }
+  body { height: auto; overflow: visible; }
+  .layout { flex-direction: column; overflow: visible; flex: none; }
+  main { overflow-y: visible; height: auto; }
   .sidebar { width: auto; flex: none; padding: 16px 24px 0; }
 }
 
