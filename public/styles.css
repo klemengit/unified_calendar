@@ -467,6 +467,82 @@ button.danger:hover { background: #fee2e2; }
 .caldav-form input#caldav-username { flex: 1 1 160px; }
 .caldav-form input#caldav-password { flex: 1 1 140px; }
 
+/* ── Search modal ── */
+#search-modal {
+  align-items: flex-start;
+  padding-top: 15vh;
+}
+.search-box {
+  background: var(--card);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 560px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+.search-input {
+  display: block;
+  width: 100%;
+  padding: 14px 18px;
+  font-size: 1rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  outline: none;
+  font-family: inherit;
+  background: transparent;
+  color: var(--text);
+}
+.search-input::placeholder { color: var(--muted); }
+.search-results {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 380px;
+  overflow-y: auto;
+}
+.search-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+.search-item:hover, .search-item.selected { background: #f0f1f3; }
+.search-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 10px; }
+.search-item-icon { font-size: 0.9rem; flex: 0 0 auto; }
+.search-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.search-item-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-item-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-item-label { font-size: 0.9rem; }
+.search-empty { padding: 12px 16px; color: var(--muted); font-size: 0.88rem; }
+.search-hint {
+  padding: 7px 16px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  background: #fafafa;
+  text-align: right;
+}
+
 /* ── Google calendars list (settings page) ── */
 .gcal-list {
   list-style: none;

@@ -88,6 +88,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateLastSyncedDisplay();
   setInterval(updateLastSyncedDisplay, 60000);
   document.getElementById('sync-btn').addEventListener('click', syncNow);
+  setupSearch();
   prefetchLargeWindow();
 });
 
@@ -580,6 +581,7 @@ function setupModals() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      closeSearch();
       closeDetail();
       closeDay();
       closeEventForm();
@@ -942,4 +944,267 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
   );
+}
+
+// ── Search ──
+
+let searchSelIdx = -1;
+
+function setupSearch() {
+  const overlay = document.getElementById('search-modal');
+  const input = document.getElementById('search-input');
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      openSearch();
+    }
+  });
+
+  input.addEventListener('input', () => runSearch(input.value));
+  input.addEventListener('keydown', (e) => {
+    const items = document.querySelectorAll('#search-results .search-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      searchSelIdx = Math.min(searchSelIdx + 1, items.length - 1);
+      highlightSearch(items);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      searchSelIdx = Math.max(searchSelIdx - 1, 0);
+      highlightSearch(items);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const sel = document.querySelector('#search-results .search-item.selected');
+      if (sel) sel.click();
+    }
+  });
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeSearch(); });
+}
+
+function openSearch() {
+  const overlay = document.getElementById('search-modal');
+  const input = document.getElementById('search-input');
+  overlay.classList.remove('hidden');
+  input.value = '';
+  document.getElementById('search-results').innerHTML = '';
+  searchSelIdx = -1;
+  input.focus();
+}
+
+function closeSearch() {
+  document.getElementById('search-modal').classList.add('hidden');
+}
+
+function highlightSearch(items) {
+  items.forEach((el, i) => el.classList.toggle('selected', i === searchSelIdx));
+  items[searchSelIdx]?.scrollIntoView({ block: 'nearest' });
+}
+
+function runSearch(raw) {
+  const query = raw.trim();
+  const results = document.getElementById('search-results');
+  results.innerHTML = '';
+  searchSelIdx = -1;
+
+  if (!query) return;
+
+  // Date-jump result
+  const date = parseSearchDate(query);
+  if (date) {
+    const li = document.createElement('li');
+    li.className = 'search-item search-item-date';
+    const label = date.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    li.innerHTML = `<span class="search-item-icon">📅</span><span class="search-item-label">Jump to ${esc(label)}</span>`;
+    li.addEventListener('click', () => { calendar.gotoDate(date); closeSearch(); });
+    results.appendChild(li);
+  }
+
+  // Event search (min 2 chars)
+  if (query.length >= 2) {
+    const q = query.toLowerCase();
+    const seen = new Set();
+    const matches = [];
+    for (const events of eventCache.values()) {
+      for (const e of events) {
+        if (seen.has(e.id)) continue;
+        seen.add(e.id);
+        if (
+          (e.title || '').toLowerCase().includes(q) ||
+          (e.description || e.extendedProps?.description || '').toLowerCase().includes(q) ||
+          (e.location || e.extendedProps?.location || '').toLowerCase().includes(q) ||
+          (e.source || e.extendedProps?.source || '').toLowerCase().includes(q)
+        ) {
+          matches.push(e);
+        }
+      }
+    }
+    matches.sort((a, b) => new Date(a.start) - new Date(b.start));
+    for (const e of matches.slice(0, 50)) {
+      const li = document.createElement('li');
+      li.className = 'search-item search-item-event';
+      const color = e.color || '#888';
+      const startDate = new Date(e.start);
+      const dateStr = startDate.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      const timeStr = e.allDay ? 'All day' : startDate.toLocaleTimeString([], timeFmt());
+      li.innerHTML = `
+        <span class="search-dot" style="background:${color}"></span>
+        <span class="search-item-content">
+          <span class="search-item-title">${esc(e.title || '(no title)')}</span>
+          <span class="search-item-meta">${esc(dateStr)} · ${timeStr}${e.source ? ' · ' + esc(e.source) : ''}</span>
+        </span>`;
+      li.addEventListener('click', () => { closeSearch(); openRawEventModal(e, startDate); });
+      results.appendChild(li);
+    }
+  }
+
+  if (results.children.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'search-empty';
+    li.textContent = 'No results';
+    results.appendChild(li);
+  } else {
+    searchSelIdx = 0;
+    results.children[0].classList.add('selected');
+  }
+}
+
+function openRawEventModal(raw, startDate) {
+  calendar.gotoDate(startDate);
+  openModal({
+    id: raw.id,
+    title: raw.title,
+    start: new Date(raw.start),
+    end: raw.end ? new Date(raw.end) : null,
+    allDay: !!raw.allDay,
+    backgroundColor: raw.color,
+    extendedProps: {
+      color: raw.color,
+      source: raw.source,
+      calId: raw.calId,
+      location: raw.location,
+      description: raw.description,
+      originalUrl: raw.originalUrl,
+      caldavEventUid: raw.caldavEventUid,
+    },
+  });
+}
+
+function parseSearchDate(query) {
+  const q = query.trim().toLowerCase();
+  if (q.length < 3) return null;
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const clone = () => new Date(today);
+
+  if (q === 'today') return clone();
+  if (q === 'tomorrow') { const d = clone(); d.setDate(d.getDate() + 1); return d; }
+  if (q === 'yesterday') { const d = clone(); d.setDate(d.getDate() - 1); return d; }
+  if (q === 'this week') {
+    const d = clone(); d.setDate(d.getDate() - (d.getDay() + 6) % 7); return d;
+  }
+  if (q === 'next week') {
+    const d = clone();
+    const diff = ((8 - d.getDay()) % 7) || 7;
+    d.setDate(d.getDate() + diff); return d;
+  }
+  if (q === 'last week') {
+    const d = clone(); d.setDate(d.getDate() - (d.getDay() + 6) % 7 - 7); return d;
+  }
+  if (q === 'this month') return new Date(today.getFullYear(), today.getMonth(), 1);
+  if (q === 'next month') return new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  if (q === 'last month') return new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  if (q === 'this year') return new Date(today.getFullYear(), 0, 1);
+  if (q === 'next year') return new Date(today.getFullYear() + 1, 0, 1);
+  if (q === 'last year') return new Date(today.getFullYear() - 1, 0, 1);
+
+  const MONTHS = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+  const MONTHS_S = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  const DAYS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  const DAYS_S = ['sun','mon','tue','wed','thu','fri','sat'];
+
+  const getMonth = (s) => { const i = MONTHS.indexOf(s); return i >= 0 ? i : MONTHS_S.indexOf(s); };
+  const getDay = (s) => { const i = DAYS.indexOf(s); return i >= 0 ? i : DAYS_S.indexOf(s); };
+
+  // next/last [weekday]: "next monday", "last friday"
+  const mRel = q.match(/^(next|last)\s+(\w+)$/);
+  if (mRel) {
+    const dow = getDay(mRel[2]);
+    if (dow >= 0) {
+      const d = clone();
+      if (mRel[1] === 'next') {
+        const diff = ((dow - d.getDay() + 7) % 7) || 7;
+        d.setDate(d.getDate() + diff);
+      } else {
+        const diff = ((d.getDay() - dow + 7) % 7) || 7;
+        d.setDate(d.getDate() - diff);
+      }
+      return d;
+    }
+  }
+
+  // [month] [year]: "june 2026"
+  const mMY = q.match(/^(\w+)\s+(\d{4})$/);
+  if (mMY) {
+    const mi = getMonth(mMY[1]);
+    const yr = parseInt(mMY[2]);
+    if (mi >= 0 && yr >= 1900 && yr <= 2100) return new Date(yr, mi, 1);
+  }
+
+  // [day] [month] [year?]: "15 june" or "15 june 2026"
+  const mDM = q.match(/^(\d{1,2})\s+(\w+)(?:\s+(\d{4}))?$/);
+  if (mDM) {
+    const day = parseInt(mDM[1]);
+    const mi = getMonth(mDM[2]);
+    const yr = mDM[3] ? parseInt(mDM[3]) : today.getFullYear();
+    if (mi >= 0 && day >= 1 && day <= 31) return new Date(yr, mi, day);
+  }
+
+  // [month] [day] [year?]: "june 15" or "june 15 2026"
+  const mMD = q.match(/^(\w+)\s+(\d{1,2})(?:\s+(\d{4}))?$/);
+  if (mMD) {
+    const mi = getMonth(mMD[1]);
+    const day = parseInt(mMD[2]);
+    const yr = mMD[3] ? parseInt(mMD[3]) : today.getFullYear();
+    if (mi >= 0 && day >= 1 && day <= 31) return new Date(yr, mi, day);
+  }
+
+  // ISO date: "2026-06-15"
+  const mISO = q.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (mISO) {
+    const d = new Date(parseInt(mISO[1]), parseInt(mISO[2]) - 1, parseInt(mISO[3]));
+    if (!isNaN(d)) return d;
+  }
+
+  // ISO month: "2026-06"
+  const mISOm = q.match(/^(\d{4})-(\d{2})$/);
+  if (mISOm) return new Date(parseInt(mISOm[1]), parseInt(mISOm[2]) - 1, 1);
+
+  // Year: "2026"
+  const mYear = q.match(/^(\d{4})$/);
+  if (mYear) {
+    const yr = parseInt(mYear[1]);
+    if (yr >= 1900 && yr <= 2100) return new Date(yr, 0, 1);
+  }
+
+  // Just a weekday name: "monday" → next occurrence
+  const dayOnly = getDay(q);
+  if (dayOnly >= 0) {
+    const d = clone();
+    const diff = ((dayOnly - d.getDay() + 7) % 7) || 7;
+    d.setDate(d.getDate() + diff);
+    return d;
+  }
+
+  // Just a month name: "june" → 1st of that month this/next year
+  const monthOnly = getMonth(q);
+  if (monthOnly >= 0) {
+    const yr = today.getMonth() <= monthOnly ? today.getFullYear() : today.getFullYear() + 1;
+    return new Date(yr, monthOnly, 1);
+  }
+
+  return null;
 }
