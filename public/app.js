@@ -83,6 +83,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderStatus();
   setupModals();
   setupJumpTo();
+  setupSidebar();
   setupBackgroundSync(settings.syncInterval ?? 15);
   updateLastSyncedDisplay();
   setInterval(updateLastSyncedDisplay, 60000);
@@ -238,21 +239,49 @@ function timeFmt() {
   return { hour: hour12 ? 'numeric' : '2-digit', minute: '2-digit', hour12 };
 }
 
+// ── Sidebar drawer (mobile) ──
+
+function setupSidebar() {
+  const toggle = document.getElementById('sidebar-toggle');
+  const close = document.getElementById('sidebar-close');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  if (!toggle) return;
+  toggle.addEventListener('click', () => {
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar.classList.contains('open')) closeSidebar(); else openSidebar();
+  });
+  close?.addEventListener('click', closeSidebar);
+  backdrop?.addEventListener('click', closeSidebar);
+}
+
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar-backdrop').classList.add('visible');
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.remove('visible');
+}
+
 // ── Calendar initialization ──
 
 function initCalendar() {
+  const isMobile = window.innerWidth < 768;
   calendar = new FullCalendar.Calendar(document.getElementById('calendar'), {
     initialView: settings.defaultView || 'timeGridWeek',
     firstDay: settings.firstDay ?? 1,
     weekends: settings.showWeekends !== false,
-    weekNumbers: true,
+    weekNumbers: !isMobile,
     eventTimeFormat: timeFmt(),
     slotLabelFormat: timeFmt(),
+    dayHeaderFormat: isMobile ? { weekday: 'short', day: 'numeric' } : undefined,
     headerToolbar: {
       left: 'prev,next today',
       center: 'title',
       right: 'dayGridMonth,timeGridWeek,timeGridDay',
     },
+    allDayText: '',
     height: '100%',
     scrollTime: '05:00:00',
     nowIndicator: true,

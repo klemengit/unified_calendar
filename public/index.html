@@ -11,7 +11,10 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>📅 Unified Calendar</h1>
+    <div class="topbar-left">
+      <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle calendars sidebar">☰</button>
+      <h1>📅 Unified Calendar</h1>
+    </div>
     <div class="topbar-right">
       <div class="status" id="status"><!-- compact connection chips --></div>
       <div class="jump-to">
@@ -32,15 +35,18 @@
         <select id="jump-year"><!-- populated by JS --></select>
       </div>
       <span class="last-synced" id="last-synced"></span>
-      <button id="sync-btn" class="sync-btn" title="Refresh events from all calendars"><span class="sync-icon">⟳</span> Sync</button>
-      <a class="settings-link" href="/settings.html">⚙ Settings</a>
+      <button id="sync-btn" class="sync-btn" title="Refresh events from all calendars"><span class="sync-icon">⟳</span><span class="sync-label"> Sync</span></button>
+      <a class="settings-link" href="/settings.html">⚙<span class="settings-label"> Settings</span></a>
     </div>
   </header>
 
   <div id="banner" class="banner hidden"></div>
 
+  <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
   <div class="layout">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
+      <button class="sidebar-close" id="sidebar-close" aria-label="Close sidebar">✕</button>
       <h2>Calendars</h2>
       <ul id="calendars" class="cal-list"></ul>
       <button class="new-event-btn hidden" id="new-event-btn">+ New event</button>
