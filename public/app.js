@@ -380,6 +380,12 @@ async function renderStatus() {
   if (me.connected.google)
     chips.push(`<span class="chip"><span class="dot g"></span>${esc(me.connected.google.email || 'Google')}</span>`);
   el.innerHTML = chips.join('') || '<span class="chip muted">No account connected — open Settings</span>';
+
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) {
+    logoutBtn.classList.toggle('hidden', !me.authEnabled);
+    logoutBtn.onclick = () => { window.location.href = '/auth/signout'; };
+  }
 }
 
 // ── Calendars sidebar ──

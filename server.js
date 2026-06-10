@@ -134,6 +134,11 @@ if (config.authPassword) {
     }
     res.redirect('/login?error=1');
   });
+
+  app.get('/auth/signout', (req, res) => {
+    res.setHeader('Set-Cookie', 'cal_auth=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/');
+    res.redirect('/login');
+  });
 }
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -199,6 +204,7 @@ app.get(
 app.get('/api/me', (req, res) => {
   const tokens = req.session.tokens || {};
   res.json({
+    authEnabled: Boolean(config.authPassword),
     configured: {
       microsoft: isMicrosoftConfigured(),
       google: isGoogleConfigured(),

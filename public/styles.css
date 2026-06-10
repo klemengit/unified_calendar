@@ -63,6 +63,16 @@ body {
 }
 .settings-link:hover { background: #f0f1f3; }
 
+.logout-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 1rem;
+  background: var(--card);
+  color: var(--muted);
+}
+.logout-btn:hover { background: #f0f1f3; color: var(--text); }
+
 .sync-btn {
   display: inline-flex;
   align-items: center;
