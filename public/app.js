@@ -81,7 +81,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await renderCalendars();
   initCalendar();
   renderStatus();
-  setupZoom();
   setupModals();
   setupJumpTo();
   setupBackgroundSync(settings.syncInterval ?? 15);
@@ -254,7 +253,7 @@ function initCalendar() {
       center: 'title',
       right: 'dayGridMonth,timeGridWeek,timeGridDay',
     },
-    contentHeight: 'auto',
+    height: '100%',
     nowIndicator: true,
     dayMaxEvents: true,
     selectable: true,
@@ -277,7 +276,6 @@ function initCalendar() {
       }
     },
     datesSet: () => {
-      applyZoom();
       syncJumpToSelectors();
     },
   });
@@ -516,46 +514,6 @@ async function syncNow() {
   }, 500);
 }
 
-// ── Ctrl + scroll zoom ──
-
-const SLOT_MIN = 14, SLOT_MAX = 90;
-let slotPx = parseInt(localStorage.getItem('slotPx') || '0', 10) || 0;
-let lastContentHeight;
-let zoomScheduled = false;
-
-function applyZoom() {
-  if (!calendar) return;
-  const isTime = calendar.view.type.startsWith('timeGrid');
-  let target = 'auto';
-  if (isTime && slotPx) {
-    const rows = document.querySelectorAll('#calendar .fc-timegrid-slots tr').length || 48;
-    target = rows * slotPx;
-  }
-  if (target !== lastContentHeight) {
-    lastContentHeight = target;
-    calendar.setOption('contentHeight', target);
-  }
-}
-
-function setupZoom() {
-  applyZoom();
-  document.getElementById('calendar').addEventListener(
-    'wheel',
-    (e) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      if (!calendar.view.type.startsWith('timeGrid')) return;
-      e.preventDefault();
-      const base = slotPx || 24;
-      slotPx = Math.min(SLOT_MAX, Math.max(SLOT_MIN, base + (e.deltaY < 0 ? 6 : -6)));
-      localStorage.setItem('slotPx', String(slotPx));
-      if (!zoomScheduled) {
-        zoomScheduled = true;
-        requestAnimationFrame(() => { zoomScheduled = false; applyZoom(); });
-      }
-    },
-    { passive: false }
-  );
-}
 
 // ── Modals setup ──
 
