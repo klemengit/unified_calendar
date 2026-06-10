@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHmac } from 'node:crypto';
 import express from 'express';
 import session from 'express-session';
 import {
@@ -67,6 +68,74 @@ app.use(
   })
 );
 app.use(passport.initialize());
+
+// ── Optional password authentication ──
+if (config.authPassword) {
+  const VALID_TOKEN = createHmac('sha256', config.authPassword)
+    .update('calendar-auth-v1').digest('hex');
+
+  const parseCookies = (req) => {
+    const cookies = {};
+    for (const part of (req.headers.cookie || '').split(';')) {
+      const i = part.indexOf('=');
+      if (i > 0) cookies[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+    }
+    return cookies;
+  };
+
+  const loginPage = (error = false) => `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unified Calendar</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f6f8;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{background:#fff;border-radius:14px;padding:32px 28px;box-shadow:0 4px 24px rgba(0,0,0,.10);width:100%;max-width:340px;text-align:center}
+    h1{font-size:1.4rem;margin-bottom:6px}
+    .sub{color:#6b7280;font-size:.9rem;margin-bottom:24px}
+    input{width:100%;padding:10px 14px;border:1px solid #e5e7eb;border-radius:8px;font-size:1rem;margin-bottom:12px;outline:none;font-family:inherit}
+    input:focus{border-color:#2563eb}
+    button{width:100%;padding:10px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer;font-family:inherit}
+    button:hover{background:#1d4ed8}
+    .error{color:#dc2626;font-size:.875rem;margin-top:12px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📅 Unified Calendar</h1>
+    <p class="sub">Enter your password to continue</p>
+    <form method="post" action="/login">
+      <input type="password" name="password" placeholder="Password" autofocus required>
+      <button type="submit">Unlock</button>
+      ${error ? '<p class="error">Incorrect password — try again</p>' : ''}
+    </form>
+  </div>
+</body>
+</html>`;
+
+  app.use((req, res, next) => {
+    if (req.path === '/login') return next();
+    if (parseCookies(req).cal_auth === VALID_TOKEN) return next();
+    if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
+    res.redirect('/login');
+  });
+
+  app.get('/login', (req, res) => res.send(loginPage(req.query.error === '1')));
+
+  app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
+    if (req.body?.password === config.authPassword) {
+      const isSecure = config.baseUrl.startsWith('https://');
+      res.setHeader('Set-Cookie',
+        `cal_auth=${VALID_TOKEN}; HttpOnly; SameSite=Strict; Max-Age=${365 * 24 * 3600}; Path=/${isSecure ? '; Secure' : ''}`
+      );
+      return res.redirect('/');
+    }
+    res.redirect('/login?error=1');
+  });
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Restore OAuth tokens from disk when the session is fresh (e.g. after a restart).

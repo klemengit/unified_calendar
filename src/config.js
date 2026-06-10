@@ -14,6 +14,7 @@ export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   baseUrl: process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`,
   sessionSecret: process.env.SESSION_SECRET || 'dev-only-insecure-secret',
+  authPassword: process.env.AUTH_PASSWORD || null,
 
   microsoft: {
     clientId: required('MICROSOFT_CLIENT_ID'),

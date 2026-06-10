@@ -74,9 +74,25 @@ function updateLastSyncedDisplay() {
 
 // ── Initialization ──
 
+async function fetchWithLocalCache(url, cacheKey, fallback = null) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch {}
+    return data;
+  } catch {
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return fallback;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   showOAuthError();
-  settings = await fetch('/api/settings').then((r) => r.json());
+  settings = await fetchWithLocalCache('/api/settings', 'cal_settings_cache') ?? {};
   loadPersistedCache();
   await renderCalendars();
   initCalendar();
@@ -355,7 +371,8 @@ function syncJumpToSelectors() {
 // ── Connection chips ──
 
 async function renderStatus() {
-  const me = await fetch('/api/me').then((r) => r.json());
+  let me;
+  try { me = await fetch('/api/me').then((r) => r.json()); } catch { return; }
   const el = document.getElementById('status');
   const chips = [];
   if (me.connected.microsoft)
@@ -368,7 +385,7 @@ async function renderStatus() {
 // ── Calendars sidebar ──
 
 async function renderCalendars() {
-  const { calendars } = await fetch('/api/calendars').then((r) => r.json());
+  const { calendars = [] } = await fetchWithLocalCache('/api/calendars', 'cal_calendars_cache', { calendars: [] });
   const list = document.getElementById('calendars');
   list.innerHTML = '';
   writeableCals = [];
