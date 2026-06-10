@@ -254,6 +254,7 @@ function initCalendar() {
       right: 'dayGridMonth,timeGridWeek,timeGridDay',
     },
     height: '100%',
+    scrollTime: '05:00:00',
     nowIndicator: true,
     dayMaxEvents: true,
     selectable: true,
