@@ -534,6 +534,21 @@ app.get('/api/events', async (req, res) => {
     );
     // Tokens may have been silently refreshed inside getUnifiedEvents — persist them.
     if (req.session.tokens) saveTokens(req.session.tokens);
+
+    // Detect stale Google tokens that lack the calendar scope. Clear them so the
+    // user is prompted to reconnect rather than seeing repeated 403 errors.
+    const googleScopeError = result.errors.some(
+      (e) => e.provider.startsWith('gcal_') && e.message.includes('insufficient authentication scopes')
+    );
+    if (googleScopeError && req.session.tokens?.google) {
+      delete req.session.tokens.google;
+      saveTokens(req.session.tokens);
+      result.errors = result.errors.filter(
+        (e) => !(e.provider.startsWith('gcal_') && e.message.includes('insufficient authentication scopes'))
+      );
+      result.googleReauth = true;
+    }
+
     res.json(result);
   } catch (err) {
     res.status(500).json({ events: [], errors: [{ provider: 'server', message: err.message }] });

@@ -166,8 +166,14 @@ async function loadEvents(info) {
 async function fetchFromApi(key, startStr, endStr) {
   const params = new URLSearchParams({ start: startStr, end: endStr });
   const data = await fetch(`/api/events?${params}`).then((r) => r.json());
-  if (data.errors?.length) showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
-  else hideBanner();
+  if (data.googleReauth) {
+    showBanner('Google Calendar token expired — reconnect Google in Settings.');
+    renderStatus();
+  } else if (data.errors?.length) {
+    showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
+  } else {
+    hideBanner();
+  }
   const events = (data.events || []).map((e) => ({
     ...e,
     textColor: contrastColor(e.color || '#666666'),
@@ -183,8 +189,14 @@ async function refreshInBackground(key, startStr, endStr) {
   try {
     const params = new URLSearchParams({ start: startStr, end: endStr });
     const data = await fetch(`/api/events?${params}`).then((r) => r.json());
-    if (data.errors?.length) showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
-    else hideBanner();
+    if (data.googleReauth) {
+      showBanner('Google Calendar token expired — reconnect Google in Settings.');
+      renderStatus();
+    } else if (data.errors?.length) {
+      showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
+    } else {
+      hideBanner();
+    }
     eventCache.set(key, (data.events || []).map((e) => ({
       ...e,
       textColor: contrastColor(e.color || '#666666'),
