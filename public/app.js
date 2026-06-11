@@ -151,6 +151,17 @@ async function prefetchLargeWindow() {
 
 // ── Event loading ──
 
+function isWriteableCal(calId) {
+  return writeableCals.some((c) => c.id === calId);
+}
+
+// Filter to visible calendars and flag which events may be dragged / resized.
+function prepEvents(events) {
+  return events
+    .filter((e) => visibility[e.calId] !== false)
+    .map((e) => ({ ...e, editable: isWriteableCal(e.calId) }));
+}
+
 async function loadEvents(info) {
   const key = `${info.startStr}|${info.endStr}`;
 
@@ -160,7 +171,7 @@ async function loadEvents(info) {
       staleKeys.delete(key);
       refreshInBackground(key, info.startStr, info.endStr);
     }
-    return cached.filter((e) => visibility[e.calId] !== false);
+    return prepEvents(cached);
   }
 
   const superKey = findSupersetKey(info.startStr, info.endStr);
@@ -172,11 +183,11 @@ async function loadEvents(info) {
       const sep = superKey.indexOf('|');
       refreshInBackground(superKey, superKey.slice(0, sep), superKey.slice(sep + 1));
     }
-    return subset.filter((e) => visibility[e.calId] !== false);
+    return prepEvents(subset);
   }
 
   const all = await fetchFromApi(key, info.startStr, info.endStr);
-  return all.filter((e) => visibility[e.calId] !== false);
+  return prepEvents(all);
 }
 
 async function fetchFromApi(key, startStr, endStr) {
@@ -304,6 +315,9 @@ function initCalendar() {
     dayMaxEvents: true,
     selectable: true,
     unselectAuto: true,
+    editable: true,
+    eventDrop: handleEventChange,
+    eventResize: handleEventChange,
     events: (info, success, failure) => loadEvents(info).then(success, failure),
     eventClick: (info) => {
       info.jsEvent.preventDefault();
@@ -793,6 +807,60 @@ async function submitEventForm(e) {
   }
 }
 
+// Shared handler for drag-move (eventDrop) and edge-resize (eventResize).
+// Only writeable Google / CalDAV events are draggable (gated via per-event `editable`).
+async function handleEventChange(info) {
+  const ev = info.event;
+  const calId = ev.extendedProps.calId;
+  if (!isWriteableCal(calId)) { info.revert(); return; }
+
+  const isCaldav = calId.startsWith('cdav_');
+  const eventId = isCaldav ? ev.extendedProps.caldavEventUid : bareGoogleId(ev.id);
+
+  let start, end;
+  if (ev.allDay) {
+    start = toLocalYmd(ev.start);
+    // FullCalendar's end is exclusive; the server expects an inclusive last day (matches the edit form).
+    const inclEnd = ev.end ? new Date(ev.end.getTime() - 86400000) : ev.start;
+    end = toLocalYmd(inclEnd);
+  } else {
+    start = ev.start.toISOString();
+    end   = (ev.end || new Date(ev.start.getTime() + 3600000)).toISOString();
+  }
+
+  const body = {
+    calId,
+    title: ev.title,
+    start,
+    end,
+    allDay: ev.allDay,
+    location:    ev.extendedProps.location || '',
+    description: ev.extendedProps.description || '',
+  };
+
+  const url = isCaldav
+    ? `/api/caldav/events/${encodeURIComponent(eventId)}`
+    : `/api/google/events/${encodeURIComponent(eventId)}`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { showBanner(data.error || 'Failed to update event'); info.revert(); return; }
+
+    removeFromCache(isCaldav ? `cdav-${eventId}` : `g-${eventId}`);
+    if (data.event) insertIntoCache(data.event);
+    if (calendar) calendar.refetchEvents();
+    if (dayCal) dayCal.refetchEvents();
+  } catch (err) {
+    showBanner('Error updating event: ' + err.message);
+    info.revert();
+  }
+}
+
 async function deleteCurrentEvent() {
   const title = document.getElementById('ef-title').value || 'this event';
   if (!confirm(`Delete "${title}"?`)) return;
@@ -847,6 +915,9 @@ function openDayModal(date) {
       eventTimeFormat: timeFmt(),
       slotLabelFormat: timeFmt(),
       selectable: true,
+      editable: true,
+      eventDrop: handleEventChange,
+      eventResize: handleEventChange,
       events: (info, success, failure) => loadEvents(info).then(success, failure),
       eventClick: (info) => {
         info.jsEvent.preventDefault();
