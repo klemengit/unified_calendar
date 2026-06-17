@@ -5,6 +5,10 @@ const eventCache = new Map();
 const visibility = {};
 const staleKeys = new Set();
 const refreshingKeys = new Set();
+// Once Google's token is rejected, the server clears it, so follow-up requests
+// return a clean empty result. Stay sticky so a later empty response can't wipe
+// the "reconnect" banner. Reconnecting reloads the page, which resets this.
+let googleReauthNeeded = false;
 
 const CACHE_KEY = 'calCache_v2';
 const PREFETCH_PAST_DAYS = 14;
@@ -190,17 +194,26 @@ async function loadEvents(info) {
   return prepEvents(all);
 }
 
-async function fetchFromApi(key, startStr, endStr) {
-  const params = new URLSearchParams({ start: startStr, end: endStr });
-  const data = await fetch(`/api/events?${params}`).then((r) => r.json());
+// Reflect an /api/events response in the warning banner. The Google reauth state
+// is sticky: once flagged, it stays until the page reloads (i.e. after reconnect).
+function applyBannerState(data) {
   if (data.googleReauth) {
-    showBanner('Google Calendar token expired — reconnect Google in Settings.');
+    googleReauthNeeded = true;
     renderStatus();
+  }
+  if (googleReauthNeeded) {
+    showBanner('Google Calendar token expired — reconnect Google in Settings.');
   } else if (data.errors?.length) {
     showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
   } else {
     hideBanner();
   }
+}
+
+async function fetchFromApi(key, startStr, endStr) {
+  const params = new URLSearchParams({ start: startStr, end: endStr });
+  const data = await fetch(`/api/events?${params}`).then((r) => r.json());
+  applyBannerState(data);
   const events = (data.events || []).map((e) => ({
     ...e,
     textColor: contrastColor(e.color || '#666666'),
@@ -216,14 +229,7 @@ async function refreshInBackground(key, startStr, endStr) {
   try {
     const params = new URLSearchParams({ start: startStr, end: endStr });
     const data = await fetch(`/api/events?${params}`).then((r) => r.json());
-    if (data.googleReauth) {
-      showBanner('Google Calendar token expired — reconnect Google in Settings.');
-      renderStatus();
-    } else if (data.errors?.length) {
-      showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
-    } else {
-      hideBanner();
-    }
+    applyBannerState(data);
     eventCache.set(key, (data.events || []).map((e) => ({
       ...e,
       textColor: contrastColor(e.color || '#666666'),

@@ -36,10 +36,24 @@ async function refreshGoogle(token) {
   return token;
 }
 
+// Concurrent calendar jobs share one token, so a single expired access token can
+// trigger many simultaneous refresh_token POSTs (the prefetch + visible-view fetch
+// each fan out one per calendar). Dedupe by refresh token so only one refresh is
+// in flight per credential — avoids hammering the token endpoint and the races that
+// intermittently make all calendars fail at once.
+const inFlightRefreshes = new Map(); // refreshToken -> Promise<token>
+
 export async function ensureFresh(provider, token) {
   const stillValid = token.expiresAt && Date.now() < token.expiresAt - 60_000;
   if (stillValid || !token.refreshToken) return token;
-  return provider === 'microsoft' ? refreshMicrosoft(token) : refreshGoogle(token);
+
+  const existing = inFlightRefreshes.get(token.refreshToken);
+  if (existing) return existing;
+
+  const refresh = provider === 'microsoft' ? refreshMicrosoft : refreshGoogle;
+  const promise = refresh(token).finally(() => inFlightRefreshes.delete(token.refreshToken));
+  inFlightRefreshes.set(token.refreshToken, promise);
+  return promise;
 }
 
 // ── Google Calendar helpers ────────────────────────────────────
@@ -254,6 +268,14 @@ export async function getUnifiedEvents(
 
 function describe(err) {
   const status = err.response?.status;
-  const detail = err.response?.data?.error?.message || err.message;
+  const data = err.response?.data;
+  let detail;
+  if (typeof data?.error === 'string') {
+    // OAuth token-endpoint error: { error: "invalid_grant", error_description: "..." }.
+    // (REST API errors instead nest a { error: { message } } object, handled below.)
+    detail = data.error_description ? `${data.error}: ${data.error_description}` : data.error;
+  } else {
+    detail = data?.error?.message || err.message;
+  }
   return status ? `${status}: ${detail}` : detail;
 }
