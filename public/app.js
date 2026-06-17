@@ -146,6 +146,24 @@ function findSupersetKey(startStr, endStr) {
   return null;
 }
 
+// Best-effort offline fallback: merge events from every cached window that overlaps
+// the requested range (deduped by event id), then clip to range. Used when the
+// network is unreachable and no single cached window covers the view.
+function collectFromCache(startStr, endStr) {
+  const rs = new Date(startStr).getTime();
+  const re = new Date(endStr).getTime();
+  const byId = new Map();
+  for (const [key, events] of eventCache) {
+    const sep = key.indexOf('|');
+    if (sep < 0) continue;
+    const ks = new Date(key.slice(0, sep)).getTime();
+    const ke = new Date(key.slice(sep + 1)).getTime();
+    if (ke <= rs || ks >= re) continue; // no overlap with requested range
+    for (const e of events) byId.set(e.id, e);
+  }
+  return filterToRange([...byId.values()], startStr, endStr);
+}
+
 async function prefetchLargeWindow() {
   const { startStr, endStr } = getPrefetchRange();
   const superKey = findSupersetKey(startStr, endStr);
@@ -190,8 +208,15 @@ async function loadEvents(info) {
     return prepEvents(subset);
   }
 
-  const all = await fetchFromApi(key, info.startStr, info.endStr);
-  return prepEvents(all);
+  try {
+    const all = await fetchFromApi(key, info.startStr, info.endStr);
+    return prepEvents(all);
+  } catch {
+    // Network unreachable (e.g. lost wifi) and this range was never cached: show
+    // whatever overlapping cached events we have rather than erroring the view.
+    showBanner('Offline — showing cached events. They will refresh when you reconnect.');
+    return prepEvents(collectFromCache(info.startStr, info.endStr));
+  }
 }
 
 // Reflect an /api/events response in the warning banner. The Google reauth state
@@ -573,18 +598,35 @@ async function syncNow() {
   const btn = document.getElementById('sync-btn');
   btn.classList.add('spinning');
   btn.disabled = true;
-  eventCache.clear();
-  staleKeys.clear();
-  refreshingKeys.clear();
-  try { localStorage.removeItem(CACHE_KEY); } catch {}
-  await Promise.all([renderCalendars(), renderStatus()]);
-  calendar.refetchEvents();
-  if (dayCal) dayCal.refetchEvents();
-  prefetchLargeWindow();
-  setTimeout(() => {
+  const stopSpinner = () => setTimeout(() => {
     btn.classList.remove('spinning');
     btn.disabled = false;
   }, 500);
+
+  // Don't sync while offline — clearing/refetching would only replace good cached
+  // events with nothing. Keep what we have and tell the user.
+  if (navigator.onLine === false) {
+    showBanner('Offline — can’t sync now. Showing cached events; they will refresh when you reconnect.');
+    stopSpinner();
+    return;
+  }
+
+  // Refresh in place rather than clearing up front: refreshInBackground replaces a
+  // range only when a fresh response arrives and silently keeps the old data on
+  // failure, so a mid-sync network drop or server error never wipes the cache.
+  const ranges = [...eventCache.keys()]
+    .map((key) => {
+      const sep = key.indexOf('|');
+      return sep < 0 ? null : { key, start: key.slice(0, sep), end: key.slice(sep + 1) };
+    })
+    .filter(Boolean);
+  refreshingKeys.clear();
+  await Promise.all([renderCalendars(), renderStatus()]);
+  await Promise.all(ranges.map((r) => refreshInBackground(r.key, r.start, r.end)));
+  prefetchLargeWindow();
+  if (calendar) calendar.refetchEvents();
+  if (dayCal) dayCal.refetchEvents();
+  stopSpinner();
 }
 
 
