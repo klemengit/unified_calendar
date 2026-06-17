@@ -212,11 +212,26 @@ async function loadEvents(info) {
     const all = await fetchFromApi(key, info.startStr, info.endStr);
     return prepEvents(all);
   } catch {
-    // Network unreachable (e.g. lost wifi) and this range was never cached: show
-    // whatever overlapping cached events we have rather than erroring the view.
-    showBanner('Offline — showing cached events. They will refresh when you reconnect.');
+    // Server itself unreachable and this range was never cached: show whatever
+    // overlapping cached events we have rather than erroring the view.
+    showBanner(OFFLINE_BANNER);
     return prepEvents(collectFromCache(info.startStr, info.endStr));
   }
+}
+
+const OFFLINE_BANNER = 'Offline — showing cached events. They will refresh when you reconnect.';
+
+// The app server runs locally, so /api/events still returns 200 when the machine is
+// offline — only the server's upstream provider fetches fail (DNS / connection
+// errors). Detect that case so we keep cached events instead of overwriting them
+// with an empty result and showing a wall of getaddrinfo errors.
+const NETWORK_ERR = /EAI_AGAIN|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|fetch failed|getaddrinfo|socket hang up|network/i;
+function isOfflineResponse(data) {
+  if (navigator.onLine === false) return true;
+  const errs = data.errors || [];
+  return errs.length > 0
+    && !(data.events && data.events.length)
+    && errs.every((e) => NETWORK_ERR.test(e.message || ''));
 }
 
 // Reflect an /api/events response in the warning banner. The Google reauth state
@@ -238,6 +253,11 @@ function applyBannerState(data) {
 async function fetchFromApi(key, startStr, endStr) {
   const params = new URLSearchParams({ start: startStr, end: endStr });
   const data = await fetch(`/api/events?${params}`).then((r) => r.json());
+  if (isOfflineResponse(data)) {
+    // Don't cache the empty result — fall back to overlapping cached events.
+    showBanner(OFFLINE_BANNER);
+    return collectFromCache(startStr, endStr);
+  }
   applyBannerState(data);
   const events = (data.events || []).map((e) => ({
     ...e,
@@ -254,6 +274,11 @@ async function refreshInBackground(key, startStr, endStr) {
   try {
     const params = new URLSearchParams({ start: startStr, end: endStr });
     const data = await fetch(`/api/events?${params}`).then((r) => r.json());
+    if (isOfflineResponse(data)) {
+      // Keep the existing cache rather than replacing good events with nothing.
+      showBanner(OFFLINE_BANNER);
+      return;
+    }
     applyBannerState(data);
     eventCache.set(key, (data.events || []).map((e) => ({
       ...e,
