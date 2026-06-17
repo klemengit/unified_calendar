@@ -147,6 +147,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   color: #92400e;
   font-size: 0.9rem;
 }
+.banner-link {
+  color: #92400e;
+  font-weight: 600;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.banner-link:hover { color: #78350f; }
 
 main { padding: 20px 24px; flex: 1; min-width: 0; overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 

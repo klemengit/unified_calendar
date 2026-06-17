@@ -202,7 +202,7 @@ function applyBannerState(data) {
     renderStatus();
   }
   if (googleReauthNeeded) {
-    showBanner('Google Calendar token expired — reconnect Google in Settings.');
+    showBanner('Google Calendar token expired.', { href: '/auth/google', text: 'Reconnect Google →' });
   } else if (data.errors?.length) {
     showBanner(data.errors.map((e) => `${e.provider}: ${e.message}`).join(' · '));
   } else {
@@ -1025,9 +1025,18 @@ function bareGoogleId(fcId) {
 
 // ── Helpers ──
 
-function showBanner(msg) {
+// `link` (optional) appends a clickable action, e.g. { href, text }. Built via DOM
+// nodes rather than innerHTML so message/error text is never interpreted as markup.
+function showBanner(msg, link) {
   const b = document.getElementById('banner');
   b.textContent = '⚠ ' + msg;
+  if (link) {
+    const a = document.createElement('a');
+    a.href = link.href;
+    a.textContent = link.text;
+    a.className = 'banner-link';
+    b.append(' ', a);
+  }
   b.classList.remove('hidden');
 }
 function hideBanner() {
