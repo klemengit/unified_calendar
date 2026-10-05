@@ -89,16 +89,18 @@ function dueBucketRank(bucket) {
 
 // ---- filterTasks --------------------------------------------------------------------------
 
-// filters: { status: 'open'|'done'|'all', buckets: string[], categories: string[], search: string }.
-// All four combine with AND. `categories` matches ANY listed category (OR) -- for filter chips,
-// "show me errands OR research" is the useful behaviour; requiring every chip to match would
-// make picking a second chip narrow results to (usually) nothing.
+// filters: { status: 'open'|'done'|'all', buckets: string[], categories: string[], lists: string[],
+// search: string }. All five combine with AND. `categories` matches ANY listed category (OR) -- for
+// filter chips, "show me errands OR research" is the useful behaviour; requiring every chip to
+// match would make picking a second chip narrow results to (usually) nothing. `lists` holds list
+// ids and works the same way (a task lives in exactly one list, so AND would always be empty).
 function filterTasks(tasks, filters, nowMs) {
   var list = Array.isArray(tasks) ? tasks : []
   var f = filters || {}
   var status = f.status || "open"
   var buckets = Array.isArray(f.buckets) ? f.buckets : []
   var categories = Array.isArray(f.categories) ? f.categories : []
+  var lists = Array.isArray(f.lists) ? f.lists : []
   var search = typeof f.search === "string" ? f.search.trim().toLowerCase() : ""
 
   var wantedBuckets = null
@@ -119,6 +121,12 @@ function filterTasks(tasks, filters, nowMs) {
     }
   }
 
+  var wantedLists = null
+  if (lists.length > 0) {
+    wantedLists = Object.create(null)
+    for (var l = 0; l < lists.length; l++) wantedLists[String(lists[l])] = true
+  }
+
   var out = []
   for (var t = 0; t < list.length; t++) {
     var task = list[t]
@@ -129,6 +137,8 @@ function filterTasks(tasks, filters, nowMs) {
     if (status === "done" && !completed) continue
 
     if (wantedBuckets && !wantedBuckets[dueBucket(task, nowMs)]) continue
+
+    if (wantedLists && !wantedLists[String(task.listId === undefined || task.listId === null ? "" : task.listId)]) continue
 
     if (wantedCategories) {
       var cats = Array.isArray(task.categories) ? task.categories : []
@@ -216,6 +226,56 @@ function categoryCounts(tasks) {
     return 0
   })
   return out
+}
+
+// ---- task lists ---------------------------------------------------------------------------
+
+// [{id, name, count}] for the list chips: one entry per list the server reported, in the server's
+// order (the first is where a task lands by default, so it stays first), empty lists included --
+// the chips are built from `lists`, not from tasks, or a freshly created list would be invisible.
+// `count` is open tasks only: it is what is left to do in that list.
+function listCounts(tasks, lists) {
+  var taskList = Array.isArray(tasks) ? tasks : []
+  var listList = Array.isArray(lists) ? lists : []
+
+  var open = Object.create(null)
+  for (var i = 0; i < taskList.length; i++) {
+    var task = taskList[i]
+    if (!task || isCompleted(task)) continue
+    var key = String(task.listId === undefined || task.listId === null ? "" : task.listId)
+    open[key] = (open[key] || 0) + 1
+  }
+
+  var out = []
+  for (var j = 0; j < listList.length; j++) {
+    var entry = listList[j]
+    if (!entry || typeof entry.id !== "string" || entry.id === "") continue
+    var name = typeof entry.name === "string" && entry.name !== "" ? entry.name : entry.id
+    out.push({ id: entry.id, name: name, count: open[entry.id] || 0 })
+  }
+  return out
+}
+
+// The selected list ids that still exist, in selection order. A list deleted on the server (or
+// one a stale cache remembered) must not leave behind a selection that silently filters to zero.
+function knownListIds(selected, lists) {
+  var picked = Array.isArray(selected) ? selected : []
+  var listList = Array.isArray(lists) ? lists : []
+  var known = Object.create(null)
+  for (var i = 0; i < listList.length; i++) {
+    if (listList[i] && typeof listList[i].id === "string") known[listList[i].id] = true
+  }
+  var out = []
+  for (var j = 0; j < picked.length; j++) {
+    if (known[String(picked[j])]) out.push(String(picked[j]))
+  }
+  return out
+}
+
+// The listId quick-add sends: the one selected list chip, or "" (the server's default list) when
+// none or several are selected -- with two lists picked there is no honest single answer.
+function quickAddListId(selected) {
+  return Array.isArray(selected) && selected.length === 1 ? String(selected[0]) : ""
 }
 
 // ---- counts for the bar clock / tab header ---------------------------------------------------

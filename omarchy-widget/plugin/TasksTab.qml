@@ -4,7 +4,7 @@ import qs.Commons
 import qs.Ui
 import "TaskModel.js" as TaskModel
 
-// Content of the Tasks tab: quick-add field, filter row, task list. Panel.qml owns the
+// Content of the Tasks tab: quick-add field, filter rows (status, list, due, category), task list. Panel.qml owns the
 // Calendar | Tasks tab bar and switches this whole component in and out of view; this file is
 // only what shows underneath once Tasks is selected.
 Column {
@@ -21,6 +21,7 @@ Column {
   property string filterStatus: "open"
   property var filterBuckets: []
   property var filterCategories: []
+  property var filterLists: [] // list ids
 
   readonly property var bucketOptions: [
     { value: "overdue", label: "Overdue" },
@@ -30,6 +31,13 @@ Column {
   ]
 
   readonly property var allTasks: root.tasksData && Array.isArray(root.tasksData.tasks) ? root.tasksData.tasks : []
+  // Built from the server's `lists`, not from tasks, so an empty (e.g. just created) list still
+  // gets a chip. With a single list there is nothing to choose, so the row and the per-task list
+  // label both stay hidden.
+  readonly property var listOptions: TaskModel.listCounts(root.allTasks, root.tasksData ? root.tasksData.lists : [])
+  readonly property bool multipleLists: root.listOptions.length > 1
+  // A selection the server no longer backs (list deleted, stale cache) is ignored, not obeyed.
+  readonly property var activeListIds: TaskModel.knownListIds(root.filterLists, root.listOptions)
   // Built from every loaded task, not the filtered set, so a chip never disappears out from
   // under the user just because another filter narrowed the list to zero of that category.
   readonly property var categoryOptions: TaskModel.categoryCounts(root.allTasks)
@@ -37,6 +45,7 @@ Column {
     status: root.filterStatus,
     buckets: root.filterBuckets,
     categories: root.filterCategories,
+    lists: root.activeListIds,
     search: ""
   }, clock.date.getTime())
   readonly property var sorted: TaskModel.sortTasks(root.filtered, clock.date.getTime())
@@ -57,12 +66,22 @@ Column {
     root.filterCategories = next
   }
 
+  function toggleList(id) {
+    var idx = root.filterLists.indexOf(id)
+    var next = root.filterLists.slice()
+    if (idx === -1) next.push(id)
+    else next.splice(idx, 1)
+    root.filterLists = next
+  }
+
   function submitQuickAdd() {
     var text = quickAddField.text
     if (String(text).trim() === "") return
     // Cleared immediately (optimistic); TasksData.addFailed puts it back if the POST fails.
     quickAddField.text = ""
-    if (root.tasksData) root.tasksData.addTask(text, "")
+    // A single selected list chip is where the task goes; a +list token in the text still wins
+    // (resolved on the server).
+    if (root.tasksData) root.tasksData.addTask(text, TaskModel.quickAddListId(root.activeListIds))
   }
 
   spacing: Style.space(8)
@@ -109,6 +128,29 @@ Column {
       fontFamily: root.fontFamily
       fontSize: Style.font.bodySmall
       onChanged: function(v) { root.filterStatus = v }
+    }
+
+    Flow {
+      visible: root.multipleLists
+      width: parent.width
+      spacing: Style.space(4)
+
+      Repeater {
+        model: root.listOptions
+
+        Button {
+          required property var modelData
+
+          text: modelData.name + " (" + modelData.count + ")"
+          bordered: true
+          selected: root.activeListIds.indexOf(modelData.id) !== -1
+          foreground: root.foreground
+          accent: Color.accent
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          onClicked: root.toggleList(modelData.id)
+        }
+      }
     }
 
     Flow {
@@ -172,6 +214,7 @@ Column {
         width: parent.width
         tasksData: root.tasksData
         task: modelData
+        listLabel: root.multipleLists && modelData && typeof modelData.listName === "string" ? modelData.listName : ""
         nowMs: clock.date.getTime()
         foreground: root.foreground
         fontFamily: root.fontFamily

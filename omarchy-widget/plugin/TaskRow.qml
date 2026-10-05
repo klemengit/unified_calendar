@@ -3,7 +3,8 @@ import qs.Commons
 import qs.Ui
 import "TaskModel.js" as TaskModel
 
-// One row in the Tasks tab list: a checkbox, the title, a due-date label, and category chips.
+// One row in the Tasks tab list: a checkbox, the title, the task's list (only when more than one
+// list is loaded), a due-date label, and category chips.
 // Mirrors EventRow.qml's row conventions (anchored header, PanelActionButton for the toggle,
 // PlainText everywhere) -- no expand-on-click here, tasks have nothing further to reveal.
 Item {
@@ -11,6 +12,8 @@ Item {
 
   property var tasksData: null
   property var task: null
+  // Set by TasksTab only when several lists are loaded; "" hides it.
+  property string listLabel: ""
   property double nowMs: 0
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
@@ -41,7 +44,7 @@ Item {
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.top: parent.top
-    height: Math.max(checkButton.implicitHeight, titleText.implicitHeight, dueText.implicitHeight) + Style.space(2)
+    height: Math.max(checkButton.implicitHeight, titleText.implicitHeight, dueText.implicitHeight, listText.implicitHeight) + Style.space(2)
 
     PanelActionButton {
       id: checkButton
@@ -68,12 +71,28 @@ Item {
       font.pixelSize: Style.font.bodySmall
     }
 
+    // Secondary text, capped at a quarter of the row so a long list name elides before the title does.
+    Text {
+      id: listText
+      textFormat: Text.PlainText
+      visible: root.listLabel !== ""
+      width: visible ? Math.min(implicitWidth, header.width / 4) : 0
+      anchors.right: dueText.visible ? dueText.left : parent.right
+      anchors.rightMargin: dueText.visible ? Style.space(8) : 0
+      anchors.verticalCenter: parent.verticalCenter
+      text: root.listLabel
+      color: root.dimForeground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      elide: Text.ElideRight
+    }
+
     Text {
       id: titleText
       textFormat: Text.PlainText
       anchors.left: checkButton.right
       anchors.leftMargin: Style.space(8)
-      anchors.right: dueText.visible ? dueText.left : parent.right
+      anchors.right: listText.visible ? listText.left : (dueText.visible ? dueText.left : parent.right)
       anchors.rightMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
       text: root.title

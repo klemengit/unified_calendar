@@ -455,3 +455,86 @@ test('summarize: defensive against null/undefined tasks array and null entries',
   assert.deepEqual(m.summarize(undefined, NOW_MS), { open: 0, done: 0, overdue: 0, dueToday: 0 });
   assert.deepEqual(m.summarize([null], NOW_MS), { open: 0, done: 0, overdue: 0, dueToday: 0 });
 });
+
+// ---- task lists -------------------------------------------------------------------------------
+
+const ERRANDS = { id: 'cdav_1_tasks', name: 'Errands', accountId: 'cdav_1', url: '' };
+const GARDEN = { id: 'cdav_1_garden', name: 'Garden', accountId: 'cdav_1', url: '' };
+const READING = { id: 'cdav_1_reading', name: 'Reading', accountId: 'cdav_1', url: '' };
+const LISTS = [ERRANDS, GARDEN, READING];
+
+function listTasks() {
+  return [
+    task({ title: 'Renew the parking permit', listId: ERRANDS.id, listName: 'Errands' }),
+    task({ title: 'Call dentist', listId: ERRANDS.id, listName: 'Errands', status: 'COMPLETED', completed: true }),
+    task({ title: 'Prune the apple tree', listId: GARDEN.id, listName: 'Garden' }),
+  ];
+}
+
+test('filterTasks: lists keeps only tasks in a selected list, OR across lists', () => {
+  const m = load();
+  const out = m.filterTasks(listTasks(), { status: 'all', lists: [GARDEN.id] }, NOW_MS);
+  assert.deepEqual(out.map((t) => t.title), ['Prune the apple tree']);
+
+  const both = m.filterTasks(listTasks(), { status: 'all', lists: [GARDEN.id, ERRANDS.id] }, NOW_MS);
+  assert.equal(both.length, 3);
+});
+
+test('filterTasks: empty lists array means every list', () => {
+  const m = load();
+  assert.equal(m.filterTasks(listTasks(), { status: 'all', lists: [] }, NOW_MS).length, 3);
+  assert.equal(m.filterTasks(listTasks(), { status: 'all' }, NOW_MS).length, 3);
+});
+
+test('filterTasks: an empty list selected on its own shows nothing', () => {
+  const m = load();
+  assert.deepEqual(m.filterTasks(listTasks(), { status: 'all', lists: [READING.id] }, NOW_MS), []);
+});
+
+test('filterTasks: lists combines with status (AND)', () => {
+  const m = load();
+  const out = m.filterTasks(listTasks(), { status: 'open', lists: [ERRANDS.id] }, NOW_MS);
+  assert.deepEqual(out.map((t) => t.title), ['Renew the parking permit']);
+});
+
+test('listCounts: one entry per list in server order, empty lists included, counting open tasks only', () => {
+  const m = load();
+  assert.deepEqual(m.listCounts(listTasks(), LISTS), [
+    { id: ERRANDS.id, name: 'Errands', count: 1 },
+    { id: GARDEN.id, name: 'Garden', count: 1 },
+    { id: READING.id, name: 'Reading', count: 0 },
+  ]);
+});
+
+test('listCounts: a task in a list the server no longer reports is not counted anywhere', () => {
+  const m = load();
+  const tasks = [task({ listId: 'cdav_1_gone' })];
+  assert.deepEqual(m.listCounts(tasks, [GARDEN]), [{ id: GARDEN.id, name: 'Garden', count: 0 }]);
+});
+
+test('listCounts: a list with no name falls back to its id; malformed lists are skipped', () => {
+  const m = load();
+  const out = m.listCounts([], [{ id: 'cdav_1_x' }, null, { name: 'no id' }]);
+  assert.deepEqual(out, [{ id: 'cdav_1_x', name: 'cdav_1_x', count: 0 }]);
+});
+
+test('listCounts: defensive against null/undefined inputs', () => {
+  const m = load();
+  assert.deepEqual(m.listCounts(null, null), []);
+  assert.deepEqual(m.listCounts(undefined, LISTS).map((l) => l.count), [0, 0, 0]);
+});
+
+test('knownListIds: drops selected ids the server no longer reports, keeps selection order', () => {
+  const m = load();
+  assert.deepEqual(m.knownListIds([READING.id, 'cdav_1_gone', ERRANDS.id], LISTS), [READING.id, ERRANDS.id]);
+  assert.deepEqual(m.knownListIds(null, LISTS), []);
+  assert.deepEqual(m.knownListIds([GARDEN.id], null), []);
+});
+
+test('quickAddListId: exactly one selected list is sent, otherwise the server default', () => {
+  const m = load();
+  assert.equal(m.quickAddListId([GARDEN.id]), GARDEN.id);
+  assert.equal(m.quickAddListId([]), '');
+  assert.equal(m.quickAddListId([GARDEN.id, READING.id]), '');
+  assert.equal(m.quickAddListId(null), '');
+});
