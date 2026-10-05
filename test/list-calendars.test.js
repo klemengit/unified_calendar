@@ -43,6 +43,8 @@ test('calendar-list.js listCalendars: shape/order for a representative mix of a 
       { id: `${account.id}_cal1`, kind: 'caldav-sub', name: 'Personal', color: '#0891b2' },
     ]
   );
+  // The editor only offers moves between calendars of one account, so it needs to know which.
+  assert.equal(calendars.find((c) => c.kind === 'caldav-sub').accountId, account.id);
   // The unselected CalDAV calendar must never be exposed.
   assert.ok(!calendars.some((c) => c.name === 'Not selected'));
 });

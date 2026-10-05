@@ -695,7 +695,7 @@ async function renderCalendars() {
     visibility[cal.id] = cal.visible;
 
     if ((cal.kind === 'google-sub' || cal.kind === 'caldav-sub') && cal.writeable) {
-      writeableCals.push({ id: cal.id, name: cal.name });
+      writeableCals.push({ id: cal.id, name: cal.name, accountId: cal.accountId });
     }
 
     const li = document.createElement('li');
@@ -766,11 +766,12 @@ function calendarsByUse() {
   });
 }
 
-function populateCalendarSelector() {
+// `only` narrows the list, e.g. to the calendars a CalDAV event can move between.
+function populateCalendarSelector(only = () => true) {
   const sel = document.getElementById('ef-cal');
   if (!sel) return;
   sel.innerHTML = '';
-  for (const cal of calendarsByUse()) {
+  for (const cal of calendarsByUse().filter(only)) {
     const opt = document.createElement('option');
     opt.value = cal.id;
     opt.textContent = cal.name;
@@ -1068,8 +1069,16 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
         ? toDatetimeLocal(event.end)
         : toDatetimeLocal(new Date(event.start.getTime() + 3600000));
     }
+    // A CalDAV event can move to any other calendar of its account (the server
+    // MOVEs it); Google events stay where they are.
+    if (isCaldav) {
+      const accountId = writeableCals.find((c) => c.id === editingCalId)?.accountId;
+      populateCalendarSelector((c) => c.id.startsWith('cdav_') && c.accountId === accountId);
+    } else {
+      populateCalendarSelector();
+    }
     calSel.value    = editingCalId;
-    calSel.disabled = true;
+    calSel.disabled = !isCaldav || calSel.options.length < 2;
   } else {
     editingEventId = null;
     editingCalId   = null;
@@ -1091,6 +1100,7 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
         ? toDatetimeLocal(end)
         : (start ? toDatetimeLocal(new Date(start.getTime() + 3600000)) : '');
     }
+    populateCalendarSelector();
     calSel.disabled = false;
     if (calSel.options.length > 0) calSel.selectedIndex = 0;
   }
@@ -1129,7 +1139,8 @@ async function submitEventForm(e) {
   const allDay     = document.getElementById('ef-allday').checked;
   const startInput = document.getElementById('ef-start');
   const endInput   = document.getElementById('ef-end');
-  const calId      = editingCalId || document.getElementById('ef-cal').value;
+  const calSelValue = document.getElementById('ef-cal').value;
+  const calId      = editingCalId?.startsWith('cdav_') ? calSelValue : (editingCalId || calSelValue);
 
   let start, end;
   if (allDay) {
@@ -1151,6 +1162,7 @@ async function submitEventForm(e) {
   };
 
   const isCaldav = calId.startsWith('cdav_');
+  if (isCaldav && editingEventId) body.fromCalId = editingCalId;
 
   // Send the guest list only when it is meaningful: leaving the key out tells
   // the server to keep whatever guests the event already has.
