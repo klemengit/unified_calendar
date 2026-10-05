@@ -209,12 +209,19 @@ etag }`. `due` is a plain `YYYY-MM-DD` for a date-only DUE, or an ISO UTC
 string when it carries a time — `dueHasTime` says which. A list that fails to
 fetch is reported in `errors` as `{ listId, message }`; the other lists still
 return their tasks. No CalDAV account configured is not an error: `tasks` and
-`lists` come back empty with `200`.
+`lists` come back empty with `200`. `lists` is every discovered task list as `{ id, name,
+accountId, url }`, empty ones included. `?refresh=lists` re-runs list discovery
+instead of answering from the one-hour cache described below — what the
+widget's manual refresh sends, so a list created on the server appears without
+restarting anything.
 
 **`POST /api/widget/tasks`** — body `{ text, listId? }`, `text` 1-500
 characters, parsed with the quick-add grammar below. Returns `{ task }` and
-`201`. An unknown `listId` is `404`; text that parses down to an empty title is
-`400`.
+`201`. The task goes into the list named by a `+list` token in the text if
+there is one, else the list `listId` names, else the first discovered list.
+An unknown `listId` is `404`; text that parses down to an empty title, two
+`+list` tokens, or a `+list` token that matches no list or several is `400`,
+with an `error` that names the candidate lists (names only).
 
 **`POST /api/widget/tasks/complete`** — body `{ id, completed }`. Returns
 `{ task }`, or `409` when the task changed on the server since it was fetched
@@ -233,6 +240,7 @@ quick-add field:
 | `@word` | a category (repeatable) |
 | `!1`-`!9` | priority |
 | `due:<when>` | see below |
+| `+list` | the task list to file it in, see below |
 | everything left over | the title |
 
 `due:` accepts `today`, `tomorrow`, a weekday name (`friday`/`fri`, meaning the
@@ -240,6 +248,14 @@ next such day, never today), `YYYY-MM-DD`, `D.M.` or `D.M.YYYY`, `+3d`, `+2w`.
 An unparseable `due:` token stays in the title rather than being dropped.
 Tokens are only recognised as whole, whitespace-separated words, so an email
 address or `!important` inside running text is left alone.
+
+`+list` matches list names ignoring case and diacritics; a unique prefix is
+enough (`+gar` for `Garden`), and an exact name wins over a longer one it is a
+prefix of. Write a multi-word name with hyphens: `+home-repairs` for
+`Home Repairs`. The token must start with a letter, so a phone number like
+`+15555550100` stays in the title. A token that matches no list makes the
+server re-discover lists once before giving up, so a list created a moment ago
+is found. Example: `Prune the apple tree +garden due:friday`.
 
 **What the CalDAV server keeps.** These are limits of the Open-Xchange
 (mailbox.org) backend, checked against a live server — not of this code:

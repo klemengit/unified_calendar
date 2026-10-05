@@ -149,10 +149,33 @@ server exposes at `/api/widget/tasks` — see the root
 what the CalDAV server itself will and won't keep.
 
 The tab has a quick-add field (same grammar as the server's, see the root
-README), filters for status (Open/Completed/All), due bucket (Overdue/
-Today/Week/No date), and category, and a checkbox on each task. Ticking one is
-optimistic: the row flips immediately and rolls back if the server rejects the
-change.
+README), filters for status (Open/Completed/All), task list, due bucket
+(Overdue/Today/Week/No date), and category, and a checkbox on each task.
+Ticking one is optimistic: the row flips immediately and rolls back if the
+server rejects the change.
+
+**Task lists.** When the account has more than one task list, a row of list
+chips appears, one per list with its open-task count — empty lists included,
+since the chips come from the server's list of lists rather than from the
+tasks. Like the category chips, they filter (any selected list matches; none
+selected means all lists), and each task shows its list's name in small text
+beside the due date. With a single list both stay hidden.
+
+Quick-add picks the list in this order:
+
+1. a `+list` token in the text — `Prune the apple tree +garden due:friday`;
+   case- and diacritic-insensitive, a unique prefix is enough, multi-word
+   names take hyphens (`+home-repairs`);
+2. the one selected list chip, if exactly one is selected;
+3. the first list.
+
+A `+list` token that matches nothing, or more than one list, is refused: the
+text goes back into the field and the status line names the lists it could
+have meant.
+
+The refresh button beside the quick-add field (and the `calendarRefresh` IPC
+call) also makes the server re-discover task lists, which it otherwise caches
+for an hour — use it after creating a list elsewhere.
 
 Days with an open task due get a marker in the month grid — a different shape
 and position from the event dots, so the two never read as the same thing —
@@ -163,7 +186,7 @@ is overdue; otherwise the clock looks exactly as it did before Tasks existed.
 ## IPC
 
     omarchy-shell omarchy.clock calendarHealth     # JSON: {ok, loadedAt, ...}
-    omarchy-shell omarchy.clock calendarRefresh    # force a poll now
+    omarchy-shell omarchy.clock calendarRefresh    # force a poll now (tasks and task lists too)
     omarchy-shell omarchy.clock selectDay <YYYY-MM-DD>
     omarchy-shell omarchy.clock toggleUpcoming
 
