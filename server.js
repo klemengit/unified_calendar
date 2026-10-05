@@ -49,6 +49,7 @@ import {
   discoverCalendars,
   createCalDavEvent,
   updateCalDavEvent,
+  moveCalDavEvent,
   deleteCalDavEvent,
 } from './src/caldav.js';
 import { registerWidgetRoutes, importantBodyError } from './src/widget-routes.js';
@@ -560,12 +561,21 @@ app.post('/api/caldav/events', async (req, res) => {
   }
 });
 
+// fromCalId, when it differs from calId, moves the event to calId before saving the edit.
 app.put('/api/caldav/events/:uid', async (req, res) => {
-  const { calId, title, start, end, allDay, location, description } = req.body || {};
+  const { calId, fromCalId, title, start, end, allDay, location, description } = req.body || {};
   if (!calId || !title || !start) return res.status(400).json({ error: 'calId, title and start are required' });
   const found = findCaldavCalendar(calId);
   if (!found) return res.status(404).json({ error: 'Unknown CalDAV calendar' });
+  const from = fromCalId && fromCalId !== calId ? findCaldavCalendar(fromCalId) : null;
+  if (fromCalId && fromCalId !== calId) {
+    if (!from) return res.status(404).json({ error: 'Unknown source CalDAV calendar' });
+    if (from.account.id !== found.account.id) {
+      return res.status(400).json({ error: 'Events can only move between calendars of the same CalDAV account' });
+    }
+  }
   try {
+    if (from) await moveCalDavEvent(found.account, req.params.uid, from.calendar.url, found.calendar.url);
     const event = await updateCalDavEvent(found.account, found.calendar, req.params.uid, { title, start, end, allDay, location, description });
     res.json({ event });
   } catch (err) {

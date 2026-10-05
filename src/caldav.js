@@ -325,6 +325,21 @@ export async function updateCalDavEvent(account, calendar, uid, eventData) {
   return makeEvent(uid, eventData, calendar, account);
 }
 
+// MOVE rather than PUT-then-DELETE: servers such as mailbox.org refuse a second
+// copy of a UID even for a moment, and MOVE keeps the UID (so stars survive).
+export async function moveCalDavEvent(account, uid, fromCalUrl, toCalUrl) {
+  await axios.request({
+    method: 'MOVE',
+    url: eventUrl(fromCalUrl, uid),
+    headers: {
+      Authorization: basicAuth(account.username, account.password),
+      Destination: eventUrl(toCalUrl, uid),
+      Overwrite: 'F',
+    },
+    validateStatus: (s) => s >= 200 && s < 300,
+  });
+}
+
 export async function deleteCalDavEvent(account, uid, calUrl) {
   await axios.request({
     method: 'DELETE',
