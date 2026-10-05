@@ -271,7 +271,10 @@ export function registerWidgetRoutes(app, deps) {
     // await here would otherwise crash the process.
     try {
       const now = deps.now();
-      const { entries, errors } = await collectListEntries(deps, getTaskLists, now);
+      // `?refresh=lists` re-runs discovery now instead of waiting out the TTL, so a list created on
+      // the server shows up on the next manual refresh. Any other value is ignored.
+      const forceRefresh = req.query.refresh === 'lists';
+      const { entries, errors } = await collectListEntries(deps, getTaskLists, now, { forceRefresh });
 
       const lists = entries.map(({ account, list }) => ({
         id: list.id,

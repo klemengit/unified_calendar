@@ -620,3 +620,34 @@ test('GET /api/widget/tasks: returns every discovered list, including one with n
     await app.close();
   }
 });
+
+test('GET /api/widget/tasks?refresh=lists bypasses the discovery cache', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    await getJson(app.baseUrl, '/api/widget/tasks');
+    await getJson(app.baseUrl, '/api/widget/tasks');
+    assert.equal(calls.discover, 1, 'a plain poll reuses the cache');
+
+    const { res } = await getJson(app.baseUrl, '/api/widget/tasks?refresh=lists');
+    assert.equal(res.status, 200);
+    assert.equal(calls.discover, 2, 'refresh=lists re-discovers');
+
+    await getJson(app.baseUrl, '/api/widget/tasks');
+    assert.equal(calls.discover, 2, 'and the refreshed result is cached for the next plain poll');
+  } finally {
+    await app.close();
+  }
+});
+
+test('GET /api/widget/tasks: any other refresh value leaves the cache alone', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    await getJson(app.baseUrl, '/api/widget/tasks');
+    await getJson(app.baseUrl, '/api/widget/tasks?refresh=1');
+    assert.equal(calls.discover, 1);
+  } finally {
+    await app.close();
+  }
+});
