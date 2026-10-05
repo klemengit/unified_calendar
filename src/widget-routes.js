@@ -6,7 +6,7 @@ import {
 } from './widget.js';
 // tasks.js is pure (no network/fs) so it's imported directly, same as widget.js above — only the
 // network-touching caldav.js functions go through `deps` (see registerWidgetRoutes).
-import { parseQuickAdd, applyCompletion } from './tasks.js';
+import { parseQuickAdd, applyCompletion, resolveListToken } from './tasks.js';
 
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MAX_RANGE_DAYS = 100;
@@ -316,18 +316,41 @@ export function registerWidgetRoutes(app, deps) {
       const bodyError = addTaskBodyError(body);
       if (bodyError) return res.status(400).json({ error: bodyError });
 
+      // Parsed before any discovery: a malformed text is a 400 that needs no network round trip.
+      const now = deps.now();
+      let parsed;
       try {
-        const now = deps.now();
-        let { entries } = await collectListEntries(deps, getTaskLists, now);
+        parsed = parseQuickAdd(body.text, { now });
+      } catch (err) {
+        // Throws on an empty title (e.g. whitespace-only text) or two +list tokens — a 400, not a 500.
+        return res.status(400).json({ error: err.message });
+      }
 
+      try {
+        let { entries } = await collectListEntries(deps, getTaskLists, now);
+        // The list may have been created after the cache was last populated — one forced retry
+        // before giving up, rather than making the client wait out a full TTL for a list it just made.
+        const rediscover = async () => {
+          ({ entries } = await collectListEntries(deps, getTaskLists, now, { forceRefresh: true }));
+        };
+
+        // Precedence: a +token in the text > an explicit listId > the first discovered list. The
+        // widget sends its single selected list chip as listId, so typing +name still overrides it.
         let target;
-        if (body.listId) {
+        if (parsed.listToken !== null) {
+          const nameOf = (e) => e.list.name;
+          let resolved = resolveListToken(parsed.listToken, entries, nameOf);
+          if (resolved.reason === 'unknown') {
+            await rediscover();
+            resolved = resolveListToken(parsed.listToken, entries, nameOf);
+          }
+          // 400, not the listId path's 404: the client sent text it can fix, not a resource id.
+          if (!resolved.list) return res.status(400).json({ error: resolved.error });
+          target = resolved.list;
+        } else if (body.listId) {
           target = entries.find((e) => e.list.id === body.listId);
           if (!target) {
-            // The list may have been created after the cache was last populated — one forced
-            // retry before giving up, rather than making the widget wait out a full TTL for a
-            // list it just made.
-            ({ entries } = await collectListEntries(deps, getTaskLists, now, { forceRefresh: true }));
+            await rediscover();
             target = entries.find((e) => e.list.id === body.listId);
           }
           // Unknown listId -> 404 (it names a specific resource that doesn't exist), as opposed
@@ -336,14 +359,6 @@ export function registerWidgetRoutes(app, deps) {
         } else {
           target = entries[0];
           if (!target) return res.status(400).json({ error: 'No task list is configured yet' });
-        }
-
-        let parsed;
-        try {
-          parsed = parseQuickAdd(body.text, { now });
-        } catch (err) {
-          // Only throws on an empty title (e.g. whitespace-only text) — a 400, not a 500.
-          return res.status(400).json({ error: err.message });
         }
 
         const fields = {

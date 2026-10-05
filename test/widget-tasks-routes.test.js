@@ -460,3 +460,163 @@ test('POST /api/widget/tasks/complete: 401 when isAuthorized returns false', asy
     await app.close();
   }
 });
+
+// ── task lists: +token, listId precedence, discovery refresh ──────────────────────
+
+const ERRANDS = { id: 'cdav_1_tasks', url: 'https://dav.example.org/caldav/tasks/', name: 'Errands', color: null };
+const GARDEN = { id: 'cdav_1_garden', url: 'https://dav.example.org/caldav/garden/', name: 'Garden', color: null };
+const READING = { id: 'cdav_1_reading', url: 'https://dav.example.org/caldav/reading/', name: 'Reading', color: null };
+
+// Three lists, Errands first (the default); records which list each create landed in.
+function makeListDeps(overrides = {}) {
+  const calls = { created: [], discover: 0 };
+  const deps = makeTasksDeps({
+    discoverTaskLists: async () => { calls.discover += 1; return [ERRANDS, GARDEN, READING]; },
+    createCalDavTask: async (account, list, fields) => {
+      calls.created.push({ list, fields });
+      return makeTask({ listId: list.id, listName: list.name, title: fields.title });
+    },
+    ...overrides,
+  });
+  return { deps, calls };
+}
+
+test('POST /api/widget/tasks: +token files the task into the matching list and drops it from the title', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Prune the apple tree +garden due:friday' });
+    assert.equal(res.status, 201);
+    assert.equal(calls.created[0].list.id, GARDEN.id);
+    assert.equal(calls.created[0].fields.title, 'Prune the apple tree');
+    assert.equal(calls.created[0].fields.due, '2026-09-18');
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: +token wins over an explicit listId in the body', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Call dentist +errands', listId: GARDEN.id });
+    assert.equal(res.status, 201);
+    assert.equal(calls.created[0].list.id, ERRANDS.id);
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: +token wins even when the body listId does not exist', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Call dentist +read', listId: 'nope' });
+    assert.equal(res.status, 201);
+    assert.equal(calls.created[0].list.id, READING.id);
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: listId without a +token beats the first-list default', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Call dentist', listId: READING.id });
+    assert.equal(res.status, 201);
+    assert.equal(calls.created[0].list.id, READING.id);
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: no +token and no listId falls back to the first list', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Renew the parking permit' });
+    assert.equal(res.status, 201);
+    assert.equal(calls.created[0].list.id, ERRANDS.id);
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: an unknown +token gives 400 naming the lists, after one forced rediscovery', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res, body } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Call dentist +work' });
+    assert.equal(res.status, 400);
+    assert.match(body.error, /\+work/);
+    assert.match(body.error, /Errands, Garden, Reading/);
+    assert.doesNotMatch(body.error, /cdav_|dav\.example/);
+    assert.equal(calls.discover, 2, 'the cached lists and one forced refresh were both tried');
+    assert.equal(calls.created.length, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: a +token for a list created after the cache was filled is found by the forced rediscovery', async () => {
+  let lists = [ERRANDS, GARDEN];
+  const { deps, calls } = makeListDeps({ discoverTaskLists: async () => lists });
+  const app = await startWidgetTestApp(deps);
+  try {
+    await getJson(app.baseUrl, '/api/widget/tasks'); // fills the discovery cache without Reading
+    lists = [ERRANDS, GARDEN, READING];
+    const { res } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Call dentist +reading' });
+    assert.equal(res.status, 201);
+    assert.equal(calls.created[0].list.id, READING.id);
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: an ambiguous +token gives 400 naming only the matching lists, without a rediscovery', async () => {
+  const groceries = { id: 'cdav_1_groceries', url: 'https://dav.example.org/caldav/groceries/', name: 'Groceries', color: null };
+  const { deps, calls } = makeListDeps({
+    discoverTaskLists: async () => { calls.discover += 1; return [ERRANDS, GARDEN, groceries]; },
+  });
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res, body } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Call dentist +g' });
+    assert.equal(res.status, 400);
+    assert.match(body.error, /Garden, Groceries/);
+    assert.doesNotMatch(body.error, /Errands/);
+    assert.equal(calls.discover, 1);
+    assert.equal(calls.created.length, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: two +tokens give 400', async () => {
+  const { deps, calls } = makeListDeps();
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res, body } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'Call dentist +garden +errands' });
+    assert.equal(res.status, 400);
+    assert.equal(typeof body.error, 'string');
+    assert.equal(calls.created.length, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('GET /api/widget/tasks: returns every discovered list, including one with no tasks', async () => {
+  const { deps } = makeListDeps({
+    fetchCalDavTasks: async (account, list) => (list.id === GARDEN.id
+      ? [makeTask({ title: 'Prune the apple tree', listId: GARDEN.id, listName: GARDEN.name })]
+      : []),
+  });
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { body } = await getJson(app.baseUrl, '/api/widget/tasks');
+    assert.deepEqual(body.lists.map((l) => l.name), ['Errands', 'Garden', 'Reading']);
+    assert.equal(body.tasks.length, 1);
+  } finally {
+    await app.close();
+  }
+});

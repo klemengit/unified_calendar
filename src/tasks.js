@@ -222,6 +222,9 @@ export function applyCompletion(task, completed, now) {
 const CATEGORY_RE = /^@([A-Za-z0-9_-]+)$/;
 const PRIORITY_RE = /^!([1-9])$/;
 const DUE_RE = /^due:(.+)$/i;
+// `+name` picks a task list. Must start with a letter, so a phone number (`+1555...`) or a stray
+// `+3d` stays in the title instead of being read as a list nobody has.
+const LIST_RE = /^\+(\p{L}[\p{L}\p{M}\p{N}_-]*)$/u;
 
 const WEEKDAYS_FULL = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const WEEKDAYS_SHORT = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -295,9 +298,11 @@ function resolveDueToken(rawToken, now) {
 }
 
 /**
- * Parse the quick-add grammar, e.g. `call the bank @admin due:friday !1`.
+ * Parse the quick-add grammar, e.g. `call the bank @admin due:friday !1 +errands`.
  * Tokens are only recognised as whole whitespace-separated words — an email address or a
- * `http://x/y!2` inside the text is left alone. Throws when no title text remains.
+ * `http://x/y!2` inside the text is left alone. Throws when no title text remains, or when more
+ * than one `+list` token is given. `listToken` is the list name as typed, without the `+`; turning
+ * it into a list is resolveListToken's job, since that needs the discovered lists.
  */
 export function parseQuickAdd(text, { now } = {}) {
   const nowDate = now instanceof Date ? now : new Date(now ?? Date.now());
@@ -306,6 +311,7 @@ export function parseQuickAdd(text, { now } = {}) {
   const categories = [];
   let priority = 0;
   let due = null;
+  let listToken = null;
   const titleWords = [];
 
   for (const word of words) {
@@ -314,6 +320,15 @@ export function parseQuickAdd(text, { now } = {}) {
 
     const prioMatch = PRIORITY_RE.exec(word);
     if (prioMatch) { priority = Number(prioMatch[1]); continue; }
+
+    const listMatch = LIST_RE.exec(word);
+    if (listMatch) {
+      // Unlike !N (last wins), a second list is refused: filing the task into the wrong list is
+      // worse than asking again.
+      if (listToken !== null) throw new Error('only one +list token per task');
+      listToken = listMatch[1];
+      continue;
+    }
 
     const dueMatch = DUE_RE.exec(word);
     if (dueMatch) {
@@ -328,5 +343,53 @@ export function parseQuickAdd(text, { now } = {}) {
   const title = titleWords.join(' ').trim();
   if (!title) throw new Error('task needs a title');
 
-  return { title, categories, due, dueHasTime: false, priority };
+  return { title, categories, due, dueHasTime: false, priority, listToken };
+}
+
+// ── resolveListToken ──
+
+// Case- and diacritic-insensitive key for a list name or a `+token`: `Home  Repairs` and
+// `home-repairs` fold to the same thing, as do `Čitanje` and `citanje`.
+function foldListName(text) {
+  return String(text ?? '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-');
+}
+
+/**
+ * Pick the task list a quick-add `+token` names. An exact (folded) name wins; otherwise the token
+ * must be a prefix of exactly one list name. Returns `{ list }` on a match, or
+ * `{ error, reason: 'unknown' | 'ambiguous', candidates }` where `candidates` and `error` carry
+ * list names only — never ids or URLs, since the message goes back to the client verbatim.
+ * `nameOf` lets a caller pass richer items (e.g. the routes' `{account, list}` entries).
+ */
+export function resolveListToken(token, lists, nameOf = (item) => item.name) {
+  const items = Array.isArray(lists) ? lists : [];
+  const key = foldListName(token);
+  const folded = items.map((item) => foldListName(nameOf(item)));
+
+  let matches = items.filter((_, i) => folded[i] === key);
+  if (matches.length === 0) matches = items.filter((_, i) => folded[i].startsWith(key));
+  if (matches.length === 1) return { list: matches[0] };
+
+  if (matches.length > 1) {
+    const candidates = matches.map(nameOf);
+    return {
+      reason: 'ambiguous',
+      candidates,
+      error: `+${token} matches more than one task list: ${candidates.join(', ')}`,
+    };
+  }
+
+  const candidates = items.map(nameOf);
+  return {
+    reason: 'unknown',
+    candidates,
+    error: candidates.length
+      ? `No task list matches +${token}. Lists: ${candidates.join(', ')}`
+      : `No task list matches +${token}: no task list is configured yet`,
+  };
 }

@@ -3,7 +3,7 @@ process.env.TZ = 'Europe/Ljubljana';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ical from 'node-ical';
-import { normalizeVtodo, buildVtodoIcal, applyCompletion, parseQuickAdd } from '../src/tasks.js';
+import { normalizeVtodo, buildVtodoIcal, applyCompletion, parseQuickAdd, resolveListToken } from '../src/tasks.js';
 
 // parseICS() also returns a VCALENDAR meta entry alongside the VTODO one — same shape callers of
 // fetchCalDavEvents already filter on (comp.type !== 'VEVENT'), just for VTODO here.
@@ -524,4 +524,115 @@ test('parseQuickAdd: whitespace is collapsed in the title', () => {
 test('parseQuickAdd: dueHasTime is always false', () => {
   assert.equal(parseQuickAdd('x due:today', { now: NOW_WED }).dueHasTime, false);
   assert.equal(parseQuickAdd('x', { now: NOW_WED }).dueHasTime, false);
+});
+
+// ── parseQuickAdd: +list token ──
+
+test('parseQuickAdd: no +token gives listToken null', () => {
+  assert.equal(parseQuickAdd('Call dentist', { now: NOW_WED }).listToken, null);
+});
+
+test('parseQuickAdd: +name is taken out of the title and returned as listToken', () => {
+  const result = parseQuickAdd('Prune the apple tree +garden due:friday', { now: NOW_WED });
+  assert.equal(result.title, 'Prune the apple tree');
+  assert.equal(result.listToken, 'garden');
+  assert.equal(result.due, '2026-09-18');
+});
+
+test('parseQuickAdd: +token keeps hyphens and diacritics as typed', () => {
+  assert.equal(parseQuickAdd('x +home-repairs', { now: NOW_WED }).listToken, 'home-repairs');
+  assert.equal(parseQuickAdd('x +čitanje', { now: NOW_WED }).listToken, 'čitanje');
+});
+
+test('parseQuickAdd: +token must start with a letter, so phone numbers and +3d stay in the title', () => {
+  const result = parseQuickAdd('Call dentist +15555550100 +3d', { now: NOW_WED });
+  assert.equal(result.listToken, null);
+  assert.equal(result.title, 'Call dentist +15555550100 +3d');
+});
+
+test('parseQuickAdd: a lone + or a + inside a word is not a list token', () => {
+  const result = parseQuickAdd('C++ and + more', { now: NOW_WED });
+  assert.equal(result.listToken, null);
+  assert.equal(result.title, 'C++ and + more');
+});
+
+test('parseQuickAdd: two +list tokens throw rather than silently picking one', () => {
+  assert.throws(() => parseQuickAdd('x +garden +errands', { now: NOW_WED }), /one \+list/);
+});
+
+test('parseQuickAdd: a +token alone leaves no title and throws', () => {
+  assert.throws(() => parseQuickAdd('+garden', { now: NOW_WED }), /task needs a title/);
+});
+
+// ── resolveListToken ──
+
+const ERRANDS = { id: 'cdav_1_tasks', name: 'Errands' };
+const GARDEN = { id: 'cdav_1_garden', name: 'Garden' };
+const READING = { id: 'cdav_1_reading', name: 'Reading' };
+const LISTS = [ERRANDS, GARDEN, READING];
+
+test('resolveListToken: exact name, case-insensitive', () => {
+  assert.equal(resolveListToken('garden', LISTS).list, GARDEN);
+  assert.equal(resolveListToken('GARDEN', LISTS).list, GARDEN);
+});
+
+test('resolveListToken: a unique prefix matches', () => {
+  assert.equal(resolveListToken('gar', LISTS).list, GARDEN);
+  assert.equal(resolveListToken('r', LISTS).list, READING);
+});
+
+test('resolveListToken: diacritics are ignored on both sides', () => {
+  const lists = [{ id: 'cdav_1_books', name: 'Čitanje' }, ERRANDS];
+  assert.equal(resolveListToken('citanje', lists).list.id, 'cdav_1_books');
+  assert.equal(resolveListToken('čit', lists).list.id, 'cdav_1_books');
+  assert.equal(resolveListToken('ERRÄNDS', lists).list, ERRANDS);
+});
+
+test('resolveListToken: a multi-word name matches with hyphens', () => {
+  const lists = [{ id: 'cdav_1_home', name: 'Home  Repairs' }, ERRANDS];
+  assert.equal(resolveListToken('home-repairs', lists).list.id, 'cdav_1_home');
+  assert.equal(resolveListToken('home-r', lists).list.id, 'cdav_1_home');
+});
+
+test('resolveListToken: an exact name wins over a longer name it is also a prefix of', () => {
+  const lists = [{ id: 'cdav_1_gt', name: 'Garden Tools' }, GARDEN];
+  assert.equal(resolveListToken('garden', lists).list, GARDEN);
+});
+
+test('resolveListToken: an ambiguous prefix is an error naming only the matching lists', () => {
+  const lists = [...LISTS, { id: 'cdav_1_groceries', name: 'Groceries' }];
+  const result = resolveListToken('g', lists);
+  assert.equal(result.list, undefined);
+  assert.equal(result.reason, 'ambiguous');
+  assert.deepEqual(result.candidates, ['Garden', 'Groceries']);
+  assert.match(result.error, /\+g/);
+  assert.match(result.error, /Garden, Groceries/);
+  assert.doesNotMatch(result.error, /Errands|cdav_/);
+});
+
+test('resolveListToken: an unknown token is an error naming every list, by name only', () => {
+  const result = resolveListToken('work', LISTS);
+  assert.equal(result.list, undefined);
+  assert.equal(result.reason, 'unknown');
+  assert.deepEqual(result.candidates, ['Errands', 'Garden', 'Reading']);
+  assert.match(result.error, /\+work/);
+  assert.match(result.error, /Errands, Garden, Reading/);
+  assert.doesNotMatch(result.error, /cdav_/);
+});
+
+test('resolveListToken: two lists with the same name are ambiguous, not a silent first pick', () => {
+  const lists = [GARDEN, { id: 'cdav_2_garden', name: 'Garden' }];
+  assert.equal(resolveListToken('garden', lists).reason, 'ambiguous');
+});
+
+test('resolveListToken: no lists at all is unknown, with a message that says so', () => {
+  const result = resolveListToken('garden', []);
+  assert.equal(result.reason, 'unknown');
+  assert.match(result.error, /no task list/i);
+});
+
+test('resolveListToken: a name getter lets callers pass {account, list} entries', () => {
+  const entries = LISTS.map((list) => ({ account: { id: 'cdav_1' }, list }));
+  const result = resolveListToken('read', entries, (e) => e.list.name);
+  assert.equal(result.list.list, READING);
 });
