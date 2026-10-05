@@ -135,6 +135,19 @@ function parseTasksListResponse(text) {
   return { tasks: tasks, lists: lists, syncedAt: parsed.syncedAt, errors: errors }
 }
 
+// A failed request's `{ error }` message (curl --fail-with-body hands the body through), or "".
+// Lets the status line say *why* a quick-add was refused, e.g. which lists a +token could mean.
+function parseErrorResponse(text) {
+  if (typeof text !== "string" || text === "") return ""
+  var parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (e) {
+    return ""
+  }
+  return isPlainObject(parsed) && isNonEmptyString(parsed.error) ? parsed.error : ""
+}
+
 // POST /api/widget/tasks and POST /api/widget/tasks/complete both respond with { task }.
 function parseTaskResponse(text) {
   if (typeof text !== "string" || text === "") return null
@@ -214,13 +227,16 @@ function replaceTaskById(tasks, id, newTask) {
 
 // ---- quick-add preview (cosmetic only) -----------------------------------------------------
 
-// Best-effort, client-side mirror of ONLY the `@category` and `!priority` stripping from
+// Best-effort, client-side mirror of ONLY the `@category`, `!priority` and `+list` stripping from
 // src/tasks.js's parseQuickAdd (see the shared contract's quick-add grammar) -- just enough to
 // make the optimistic row look roughly like what the server will create. Due-date tokens
 // (`due:friday`, weekday rollover, the Slovenian `D.M.` forms, timezone handling, ...) are
 // deliberately NOT reimplemented here: that grammar is subtle and owned by the server, so the
 // optimistic row simply shows no due date until the real parse comes back. This function is
-// never authoritative -- the POST response's task always overwrites the optimistic guess.
+// never authoritative -- the POST response's task always overwrites the optimistic guess. The
+// `+list` token is only stripped and reported, never resolved: which list it names is the
+// server's call. Latin letters only here (QML's JS engine has no \p{L}); a token starting with
+// another script's letter just stays in the preview title until the server's answer replaces it.
 function previewQuickAdd(text) {
   var raw = String(text === undefined || text === null ? "" : text)
   var words = raw.split(/\s+/).filter(function (w) { return w !== "" })
@@ -228,12 +244,16 @@ function previewQuickAdd(text) {
   var titleWords = []
   var categories = []
   var priority = 0
+  var listToken = ""
 
   for (var i = 0; i < words.length; i++) {
     var word = words[i]
     var catMatch = word.match(/^@([A-Za-z0-9_-]+)$/)
     var prioMatch = word.match(/^!([1-9])$/)
-    if (catMatch) {
+    var listMatch = word.match(/^\+([A-Za-z\u00C0-\u024F][A-Za-z0-9_\-\u00C0-\u024F\u0300-\u036F]*)$/)
+    if (listMatch) {
+      listToken = listMatch[1]
+    } else if (catMatch) {
       categories.push(catMatch[1])
     } else if (prioMatch) {
       priority = parseInt(prioMatch[1], 10)
@@ -242,7 +262,7 @@ function previewQuickAdd(text) {
     }
   }
 
-  return { title: titleWords.join(" "), categories: categories, priority: priority }
+  return { title: titleWords.join(" "), categories: categories, priority: priority, listToken: listToken }
 }
 
 // ---- status text ----------------------------------------------------------------------------
@@ -267,7 +287,8 @@ function composeTasksStatus(input) {
   var syncedLabel = typeof data.syncedLabel === "string" ? data.syncedLabel : ""
 
   var parts = []
-  if (data.addFailed === true) parts.push("task not added")
+  var addError = typeof data.addError === "string" ? data.addError : ""
+  if (data.addFailed === true) parts.push(addError !== "" ? "task not added: " + addError : "task not added")
   if (data.toggleFailed === true) parts.push("task not saved")
 
   if (lastFetchOk && errors.length === 0) return parts.join(" · ")

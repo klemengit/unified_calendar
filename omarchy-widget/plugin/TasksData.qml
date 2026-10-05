@@ -54,6 +54,8 @@ QtObject {
   property var _addQueue: [] // [{ tempId, text, listId }], queued while an add request is in flight
   property var _pendingAdd: null
   property bool _addFailed: false
+  // The server's reason for refusing the last add (e.g. which lists a +token could mean), or "".
+  property string _addError: ""
   property int _optimisticCounter: 0
 
   function _nowMs() {
@@ -131,7 +133,8 @@ QtObject {
       lists: root.lists,
       syncedLabel: syncedLabel,
       toggleFailed: root._toggleFailed,
-      addFailed: root._addFailed
+      addFailed: root._addFailed,
+      addError: root._addError
     })
   }
 
@@ -143,7 +146,7 @@ QtObject {
 
   // Optimistically inserts a placeholder task (see TasksDataModel.previewQuickAdd -- cosmetic
   // only, the server's parse is authoritative) and queues the real POST. `listId` may be "" to
-  // use the server's default list.
+  // use the server's default list; a `+list` token in the text overrides it on the server.
   function addTask(text, listId) {
     var trimmed = String(text === undefined || text === null ? "" : text).trim()
     if (trimmed === "") return
@@ -165,7 +168,8 @@ QtObject {
       priority: preview.priority,
       percent: 0,
       categories: preview.categories,
-      listId: listId || "",
+      // With a +token the list is the server's to resolve, so the placeholder claims none.
+      listId: preview.listToken !== "" ? "" : (listId || ""),
       listName: "",
       listUrl: "",
       accountId: "",
@@ -184,7 +188,9 @@ QtObject {
     if (next.listId !== "") body.listId = next.listId
     var url = TasksDataModel.buildTasksUrl(root._serverUrl)
     var payload = JSON.stringify(body)
-    addProc.command = ["curl", "-fsS", "--max-time", "30", "--data-raw", payload, "-H", "Content-Type: application/json", url]
+    // --fail-with-body rather than -f: a refused add still exits non-zero, but its { error } body
+    // reaches _onAddFinished so the status line can say why.
+    addProc.command = ["curl", "--fail-with-body", "-sS", "--max-time", "30", "--data-raw", payload, "-H", "Content-Type: application/json", url]
     addProc.running = true
   }
 
@@ -199,12 +205,14 @@ QtObject {
     if (task) {
       root.tasks = TasksDataModel.replaceTaskById(root.tasks, pending.tempId, task)
       root._addFailed = false
+      root._addError = ""
       addErrorTimer.stop()
       root._refreshStatus()
       root.addSucceeded()
     } else {
       root.tasks = TasksDataModel.removeTaskById(root.tasks, pending.tempId)
       root._addFailed = true
+      root._addError = TasksDataModel.parseErrorResponse(trimmed)
       addErrorTimer.restart()
       root._refreshStatus()
       root.addFailed(pending.text)
@@ -373,6 +381,7 @@ QtObject {
     interval: 30000
     onTriggered: {
       root._addFailed = false
+      root._addError = ""
       root._refreshStatus()
     }
   }

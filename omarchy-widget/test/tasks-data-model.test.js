@@ -351,6 +351,46 @@ test('previewQuickAdd: empty text yields an empty title', () => {
   assert.equal(out.priority, 0);
 });
 
+test('previewQuickAdd: strips a +list token out of the title and reports it', () => {
+  const m = load();
+  const out = m.previewQuickAdd('Prune the apple tree +garden due:friday');
+  assert.equal(out.title, 'Prune the apple tree due:friday');
+  assert.equal(out.listToken, 'garden');
+});
+
+test('previewQuickAdd: +token with hyphens or diacritics is a list token; +digits is not', () => {
+  const m = load();
+  assert.equal(m.previewQuickAdd('x +home-repairs').listToken, 'home-repairs');
+  assert.equal(m.previewQuickAdd('x +čitanje').listToken, 'čitanje');
+  const phone = m.previewQuickAdd('Call dentist +15555550100');
+  assert.equal(phone.listToken, '');
+  assert.equal(phone.title, 'Call dentist +15555550100');
+});
+
+test('previewQuickAdd: no +token gives an empty listToken', () => {
+  const m = load();
+  assert.equal(m.previewQuickAdd('Call dentist').listToken, '');
+});
+
+// ---- parseErrorResponse -------------------------------------------------------------------------
+
+test('parseErrorResponse: pulls the server error message out of a JSON body', () => {
+  const m = load();
+  assert.equal(
+    m.parseErrorResponse('{"error":"No task list matches +work. Lists: Errands, Garden, Reading"}'),
+    'No task list matches +work. Lists: Errands, Garden, Reading'
+  );
+});
+
+test('parseErrorResponse: anything else is an empty string', () => {
+  const m = load();
+  assert.equal(m.parseErrorResponse(''), '');
+  assert.equal(m.parseErrorResponse('not json'), '');
+  assert.equal(m.parseErrorResponse('{"task":{"id":"x"}}'), '');
+  assert.equal(m.parseErrorResponse('{"error":42}'), '');
+  assert.equal(m.parseErrorResponse(null), '');
+});
+
 // ---- composeTasksStatus -------------------------------------------------------------------------
 
 test('composeTasksStatus: quiet when the fetch is fresh and nothing failed', () => {
@@ -362,6 +402,15 @@ test('composeTasksStatus: addFailed prefixes "task not added"', () => {
   const m = load();
   const text = m.composeTasksStatus({ lastFetchOk: true, serverReachable: true, errors: [], addFailed: true });
   assert.equal(text, 'task not added');
+});
+
+test('composeTasksStatus: addError is appended to "task not added"', () => {
+  const m = load();
+  const text = m.composeTasksStatus({
+    lastFetchOk: true, serverReachable: true, errors: [], addFailed: true,
+    addError: '+g matches more than one task list: Garden, Groceries',
+  });
+  assert.equal(text, 'task not added: +g matches more than one task list: Garden, Groceries');
 });
 
 test('composeTasksStatus: toggleFailed prefixes "task not saved"', () => {

@@ -263,6 +263,10 @@ Column {
     visible: text !== ""
     width: parent.width
     horizontalAlignment: Text.AlignHCenter
+    // Wraps rather than truncating at one line: a refused quick-add names the lists it could
+    // have meant, and that list is the useful part.
+    wrapMode: Text.Wrap
+    maximumLineCount: 3
     elide: Text.ElideRight
     text: root.tasksData ? root.tasksData.statusText : ""
     color: Qt.darker(root.foreground, 1.5)
