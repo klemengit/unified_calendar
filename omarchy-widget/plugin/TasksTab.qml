@@ -98,14 +98,36 @@ Column {
     function onAddFailed(text) { quickAddField.text = text }
   }
 
-  TextField {
-    id: quickAddField
+  Item {
     width: parent.width
-    placeholderText: "Add a task… e.g. call the bank @admin due:friday !1"
-    foreground: root.foreground
-    font.family: root.fontFamily
-    onAccepted: root.submitQuickAdd()
-    Keys.onEscapePressed: quickAddField.focus = false
+    height: Math.max(quickAddField.implicitHeight, refreshButton.implicitHeight)
+
+    TextField {
+      id: quickAddField
+      anchors.left: parent.left
+      anchors.right: refreshButton.left
+      anchors.rightMargin: Style.space(4)
+      anchors.verticalCenter: parent.verticalCenter
+      placeholderText: "Add a task… e.g. call the bank @admin +errands due:friday !1"
+      foreground: root.foreground
+      font.family: root.fontFamily
+      onAccepted: root.submitQuickAdd()
+      Keys.onEscapePressed: quickAddField.focus = false
+    }
+
+    // Manual refresh: also re-discovers task lists on the server, so a list created elsewhere
+    // shows up now rather than after the server's one-hour list cache expires.
+    PanelActionButton {
+      id: refreshButton
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      iconText: "󰑐"
+      tooltipText: "Refresh tasks and lists"
+      foreground: Qt.darker(root.foreground, 1.5)
+      hoverColor: Color.accent
+      fontFamily: root.fontFamily
+      onClicked: if (root.tasksData) root.tasksData.refresh(true, true)
+    }
   }
 
   // ---- filters --------------------------------------------------------------------------

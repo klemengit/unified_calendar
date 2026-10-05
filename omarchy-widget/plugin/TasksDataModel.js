@@ -19,8 +19,10 @@ function stripTrailingSlashes(text) {
 
 // ---- URLs -------------------------------------------------------------------------------
 
-function buildTasksUrl(serverUrl) {
-  return stripTrailingSlashes(serverUrl) + "/api/widget/tasks"
+// `refreshLists` asks the server to re-run task-list discovery instead of answering from its
+// one-hour cache -- what the manual refresh uses, so a list just created on the server shows up.
+function buildTasksUrl(serverUrl, refreshLists) {
+  return stripTrailingSlashes(serverUrl) + "/api/widget/tasks" + (refreshLists === true ? "?refresh=lists" : "")
 }
 
 function buildTasksCompleteUrl(serverUrl) {

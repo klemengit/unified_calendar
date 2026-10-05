@@ -48,6 +48,12 @@ test('buildTasksUrl: strips a trailing slash on the server URL', () => {
   assert.equal(m.buildTasksUrl('http://127.0.0.1:3000/'), 'http://127.0.0.1:3000/api/widget/tasks');
 });
 
+test('buildTasksUrl: refreshLists asks the server to bypass its list-discovery cache', () => {
+  const m = load();
+  assert.equal(m.buildTasksUrl('http://127.0.0.1:3000/', true), 'http://127.0.0.1:3000/api/widget/tasks?refresh=lists');
+  assert.equal(m.buildTasksUrl('http://127.0.0.1:3000', false), 'http://127.0.0.1:3000/api/widget/tasks');
+});
+
 test('buildTasksCompleteUrl: appends the complete path', () => {
   const m = load();
   assert.equal(

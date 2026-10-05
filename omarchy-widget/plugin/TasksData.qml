@@ -71,14 +71,16 @@ QtObject {
 
   // ---- fetch --------------------------------------------------------------------------
 
-  function refresh(force) {
+  // `refreshLists` also makes the server re-discover task lists rather than answer from its
+  // one-hour cache -- the manual refresh passes it, the timed poll does not.
+  function refresh(force, refreshLists) {
     var now = root._nowMs()
     if (!force && now - root._lastFullFetchMs < 60000) return
     if (root._fetching) return
     root._lastFullFetchMs = now
     root._fetching = true
     root.loading = true
-    var url = TasksDataModel.buildTasksUrl(root._serverUrl)
+    var url = TasksDataModel.buildTasksUrl(root._serverUrl, refreshLists === true)
     fetchProc.command = ["curl", "-fsS", "--max-time", "30", url]
     fetchProc.running = true
   }

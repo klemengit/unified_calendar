@@ -148,6 +148,12 @@ BarWidget {
     calendarData.refresh(true)
   }
 
+  // Separate from refreshCalendar, which also runs after every star toggle: re-discovering task
+  // lists there would cost a PROPFIND per click for nothing.
+  function refreshTasks() {
+    tasksData.refresh(true, true)
+  }
+
   function electPrimary() {
     var peers = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : []
     calendarData.instances = peers.length
@@ -213,7 +219,10 @@ BarWidget {
     function hide(): void { root.close() }
     function toggle(): void { root.togglePanel() }
     function calendarHealth(): string { return calendarData.health() }
-    function calendarRefresh(): void { root.broadcast("refreshCalendar") }
+    function calendarRefresh(): void {
+      root.broadcast("refreshCalendar")
+      root.broadcast("refreshTasks")
+    }
     function selectDay(key: string): void { root.selectDay(key) }
     function toggleUpcoming(): void { root.toggleUpcoming() }
     function calendarTestReminder(): string { return root.sendTestReminder() }
