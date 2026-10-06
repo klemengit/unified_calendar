@@ -27,6 +27,10 @@ let writeableCals = [];     // [{ id: 'gcal_primary', name: 'My Calendar' }]
 // Whether the event being edited came with its guest list. Events cached before
 // guest support did not, and then the field must not be taken as "no guests".
 let editingGuestsKnown = false;
+// The occurrence being edited when it belongs to a repeating series, and the
+// series' repeat as the form first showed it (to tell whether it changed).
+let editingOccurrence = null; // { seriesId, occurrenceStart } or null
+let editingRepeat = { repeat: 'none', repeatUntil: null };
 
 function contrastColor(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
@@ -1087,6 +1091,8 @@ function setupModals() {
     applyAllDayMode(document.getElementById('ef-allday').checked);
   });
   document.getElementById('ef-cal').addEventListener('change', syncGuestsField);
+  document.getElementById('ef-repeat').addEventListener('change', syncUntilField);
+  setupScopePrompt();
   document.getElementById('ef-form').addEventListener('submit', submitEventForm);
   document.getElementById('ef-delete').addEventListener('click', deleteCurrentEvent);
   setupFormKeyboardFlow();
@@ -1100,7 +1106,7 @@ function setupModals() {
       closeSearch();
       closeDetail();
       closeDay();
-      closeEventForm();
+      if (!closeScopePrompt()) closeEventForm();
     }
   });
 }
@@ -1132,7 +1138,7 @@ function applyAllDayMode(allDay) {
 // before leaving it, so Tab is handled here for the two date fields. Reaching a
 // date field from the keyboard also opens the native picker.
 function setupFormKeyboardFlow() {
-  const order = ['ef-title', 'ef-allday', 'ef-start', 'ef-end', 'ef-cal', 'ef-guests', 'ef-loc', 'ef-desc'];
+  const order = ['ef-title', 'ef-allday', 'ef-start', 'ef-end', 'ef-repeat', 'ef-until', 'ef-cal', 'ef-guests', 'ef-loc', 'ef-desc'];
   let viaKeyboard = false;
   document.addEventListener('keydown', (e) => { if (e.key === 'Tab') viaKeyboard = true; }, true);
   document.addEventListener('mousedown', () => { viaKeyboard = false; }, true);
@@ -1144,7 +1150,7 @@ function setupFormKeyboardFlow() {
       i += back ? -1 : 1;
       if (i < 0 || i >= order.length) return null;
       const el = document.getElementById(order[i]);
-      if (el && !el.disabled) return el;
+      if (el && !el.disabled && el.offsetParent !== null) return el;
     }
   };
 
@@ -1191,6 +1197,11 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
   descInput.value  = '';
   guestInput.value = '';
   editingGuestsKnown = !isEdit;
+  editingOccurrence = isEdit && event.extendedProps.recurring
+    ? { seriesId: event.extendedProps.seriesId, occurrenceStart: event.extendedProps.occurrenceStart }
+    : null;
+  showRepeat({ repeat: 'none', repeatUntil: null });
+  if (isEdit) loadRepeat(event);
 
   if (isEdit) {
     const isCaldav = event.extendedProps.calId?.startsWith('cdav_');
@@ -1281,6 +1292,107 @@ function closeEventForm() {
   document.getElementById('event-form-modal').classList.add('hidden');
   editingEventId = null;
   editingCalId   = null;
+  editingOccurrence = null;
+}
+
+// ── Repeat ──
+
+function syncUntilField() {
+  const repeat = document.getElementById('ef-repeat').value;
+  document.getElementById('ef-until-field').classList.toggle('hidden', repeat === 'none' || repeat === 'custom');
+}
+
+// Puts a repeat into the form and remembers it as the starting point.
+function showRepeat({ repeat, repeatUntil }) {
+  editingRepeat = { repeat, repeatUntil: repeatUntil || null };
+  const select = document.getElementById('ef-repeat');
+  select.querySelector('option[value="custom"]').hidden = repeat !== 'custom';
+  select.value = repeat;
+  document.getElementById('ef-until').value = repeatUntil || '';
+  syncUntilField();
+}
+
+// CalDAV occurrences carry their series' repeat; Google lists occurrences
+// without it, so it is fetched from the series.
+async function loadRepeat(event) {
+  const p = event.extendedProps;
+  if (!p.recurring) return;
+  if (!p.calId.startsWith('gcal_')) {
+    showRepeat({ repeat: p.repeat || 'custom', repeatUntil: p.repeatUntil });
+    return;
+  }
+  const select = document.getElementById('ef-repeat');
+  select.disabled = true;
+  try {
+    const params = new URLSearchParams({ calId: p.calId, timeZone: userTimeZone() });
+    const res = await fetch(`/api/google/series/${encodeURIComponent(p.seriesId)}?${params}`);
+    const data = await res.json();
+    // The form may have moved on to another event while this was loading.
+    if (res.ok && editingOccurrence?.seriesId === p.seriesId) showRepeat(data);
+    else if (!res.ok) showRepeat({ repeat: 'custom', repeatUntil: null });
+  } catch {
+    showRepeat({ repeat: 'custom', repeatUntil: null });
+  } finally {
+    select.disabled = false;
+  }
+}
+
+function userTimeZone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+// The form's repeat for a request body: sent only when it changed, so an
+// edit that leaves it alone does not rewrite the series' own rule.
+function repeatBody() {
+  const repeat = document.getElementById('ef-repeat').value;
+  const repeatUntil = repeat === 'none' ? null : (document.getElementById('ef-until').value || null);
+  const changed = repeat !== editingRepeat.repeat || repeatUntil !== editingRepeat.repeatUntil;
+  return { changed, fields: changed ? { repeat, repeatUntil } : {} };
+}
+
+// ── "This event / All events" prompt ──
+
+let scopeResolve = null;
+
+function setupScopePrompt() {
+  const finish = (scope) => () => {
+    document.getElementById('scope-modal').classList.add('hidden');
+    const resolve = scopeResolve;
+    scopeResolve = null;
+    resolve?.(scope);
+  };
+  document.getElementById('scope-this').onclick = finish('this');
+  document.getElementById('scope-all').onclick = finish('all');
+  document.getElementById('scope-cancel').onclick = finish(null);
+  const overlay = document.getElementById('scope-modal');
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null)(); });
+}
+
+// Closes the prompt as a cancel; true when it was open.
+function closeScopePrompt() {
+  if (!scopeResolve) return false;
+  document.getElementById('scope-cancel').click();
+  return true;
+}
+
+// Asks whether a change applies to one occurrence or the whole series.
+// Resolves 'this', 'all', or null when cancelled. `onlyAllReason`, when set,
+// rules out "This event" and says why.
+function askScope(heading, onlyAllReason = null) {
+  document.getElementById('scope-heading').textContent = heading;
+  const thisBtn = document.getElementById('scope-this');
+  thisBtn.disabled = Boolean(onlyAllReason);
+  const hint = document.getElementById('scope-hint');
+  hint.textContent = onlyAllReason || '';
+  hint.classList.toggle('hidden', !onlyAllReason);
+  document.getElementById('scope-modal').classList.remove('hidden');
+  (onlyAllReason ? document.getElementById('scope-all') : thisBtn).focus();
+  return new Promise((resolve) => { scopeResolve = resolve; });
+}
+
+// Request fields naming the occurrence and the chosen scope.
+function scopeBody(scope, occurrence) {
+  return { scope, occurrenceStart: occurrence.occurrenceStart, seriesId: occurrence.seriesId };
 }
 
 async function submitEventForm(e) {
@@ -1315,6 +1427,22 @@ async function submitEventForm(e) {
 
   const isCaldav = calId.startsWith('cdav_');
   if (isCaldav && editingEventId) body.fromCalId = editingCalId;
+
+  body.timeZone = userTimeZone();
+  const { changed: repeatChanged, fields: repeatFields } = repeatBody();
+  Object.assign(body, repeatFields);
+  const occurrence = editingOccurrence;
+  if (occurrence) {
+    const reason = repeatChanged ? 'A new repeat applies to the whole series.'
+      : (isCaldav && calId !== editingCalId) ? 'Only the whole series can move to another calendar.'
+      : null;
+    const scope = await askScope('Save repeating event', reason);
+    if (!scope) { btn.disabled = false; return; }
+    Object.assign(body, scopeBody(scope, occurrence));
+  }
+  // A series changes many events at once; reload them all rather than
+  // patching the one cached copy.
+  const reloadAll = Boolean(occurrence) || (body.repeat && body.repeat !== 'none');
 
   // Send the guest list only when it is meaningful: leaving the key out tells
   // the server to keep whatever guests the event already has.
@@ -1357,6 +1485,11 @@ async function submitEventForm(e) {
     if (!res.ok) { showBanner(data.error || 'Failed to save event'); return; }
 
     if (!editingEventId) recordCalPick(calId);
+    if (reloadAll) {
+      closeEventForm();
+      await syncNow();
+      return;
+    }
     if (editingEventId) removeFromCache(isCaldav ? `cdav-${editingEventId}` : `g-${editingEventId}`);
     if (data.event) insertIntoCache(data.event);
     closeEventForm();
@@ -1400,6 +1533,16 @@ async function handleEventChange(info) {
     description: ev.extendedProps.description || '',
   };
 
+  body.timeZone = userTimeZone();
+  const occurrence = ev.extendedProps.recurring
+    ? { seriesId: ev.extendedProps.seriesId, occurrenceStart: ev.extendedProps.occurrenceStart }
+    : null;
+  if (occurrence) {
+    const scope = await askScope('Move repeating event');
+    if (!scope) { info.revert(); return; }
+    Object.assign(body, scopeBody(scope, occurrence));
+  }
+
   const url = isCaldav
     ? `/api/caldav/events/${encodeURIComponent(eventId)}`
     : `/api/google/events/${encodeURIComponent(eventId)}`;
@@ -1412,6 +1555,7 @@ async function handleEventChange(info) {
     });
     const data = await res.json();
     if (!res.ok) { showBanner(data.error || 'Failed to update event'); info.revert(); return; }
+    if (occurrence) { await syncNow(); return; }
 
     removeFromCache(isCaldav ? `cdav-${eventId}` : `g-${eventId}`);
     if (data.event) insertIntoCache(data.event);
@@ -1425,7 +1569,14 @@ async function handleEventChange(info) {
 
 async function deleteCurrentEvent() {
   const title = document.getElementById('ef-title').value || 'this event';
-  if (!confirm(`Delete "${title}"?`)) return;
+  const occurrence = editingOccurrence;
+  let scope = null;
+  if (occurrence) {
+    scope = await askScope(`Delete "${title}"`);
+    if (!scope) return;
+  } else if (!confirm(`Delete "${title}"?`)) {
+    return;
+  }
 
   const btn = document.getElementById('ef-delete');
   btn.disabled = true;
@@ -1433,18 +1584,28 @@ async function deleteCurrentEvent() {
   try {
     let res;
     if (isCaldavDel) {
-      res = await fetch(
-        `/api/caldav/events/${encodeURIComponent(editingEventId)}?calId=${encodeURIComponent(editingCalId)}`,
-        { method: 'DELETE' }
-      );
+      const params = new URLSearchParams({ calId: editingCalId });
+      if (scope === 'this') {
+        params.set('scope', 'this');
+        params.set('occurrenceStart', occurrence.occurrenceStart);
+        params.set('timeZone', userTimeZone());
+      }
+      res = await fetch(`/api/caldav/events/${encodeURIComponent(editingEventId)}?${params}`, { method: 'DELETE' });
     } else {
+      // Google deletes one occurrence by its own id, the series by the series id.
+      const id = scope === 'all' ? occurrence.seriesId : editingEventId;
       res = await fetch(
-        `/api/google/events/${encodeURIComponent(editingEventId)}?calId=${encodeURIComponent(editingCalId)}`,
+        `/api/google/events/${encodeURIComponent(id)}?calId=${encodeURIComponent(editingCalId)}`,
         { method: 'DELETE' }
       );
     }
     const data = await res.json();
     if (!res.ok) { showBanner(data.error || 'Failed to delete event'); return; }
+    if (occurrence) {
+      closeEventForm();
+      await syncNow();
+      return;
+    }
 
     removeFromCache(isCaldavDel ? `cdav-${editingEventId}` : `g-${editingEventId}`);
     closeEventForm();
@@ -1518,7 +1679,8 @@ function openModal(event) {
   document.getElementById('modal-title').textContent = event.title;
   document.getElementById('modal-cal').innerHTML =
     `<span class="swatch" style="background:${color}"></span> ${esc(p.source || '')}`;
-  document.getElementById('modal-time').textContent = formatEventTime(event);
+  document.getElementById('modal-time').textContent =
+    formatEventTime(event) + (p.recurring ? ' · ↻ repeats' : '');
 
   renderLocation(document.getElementById('modal-location'), p.location);
   renderGuests(document.getElementById('modal-guests'), p.attendees);

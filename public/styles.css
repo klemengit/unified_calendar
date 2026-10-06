@@ -932,6 +932,12 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 }
 .ef-actions-right { display: flex; gap: 8px; }
 
+/* "This event / All events" prompt for repeating events */
+.scope-box { max-width: 340px; }
+.scope-actions { display: flex; flex-direction: column; gap: 8px; }
+.scope-actions button { padding: 8px 12px; font-size: 0.9rem; }
+#scope-hint { display: block; margin-top: 10px; }
+
 button.primary { background: var(--g); color: #fff; border-color: var(--g); }
 button.primary:hover { background: var(--g-hover); border-color: var(--g-hover); }
 button.danger { color: var(--danger); border-color: var(--danger-border); background: transparent; }

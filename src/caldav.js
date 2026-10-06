@@ -2,6 +2,7 @@ import axios from 'axios';
 import ical from 'node-ical';
 import crypto from 'node:crypto';
 import { XMLParser } from 'fast-xml-parser';
+import { buildRrule, parseRrule, shiftSeries, toIcalLocal, zonedToUtc } from './recurrence.js';
 
 const xmlParser = new XMLParser({
   removeNSPrefix: true,
@@ -229,11 +230,50 @@ export async function fetchCalDavEvents(account, calendar, timeMin, timeMax) {
       for (const key of Object.keys(parsed2)) {
         const comp = parsed2[key];
         if (!comp || comp.type !== 'VEVENT' || !comp.start) continue;
-        events.push(normalizeIcalEvent(comp, calendar.id, account.id, calendar.url, calendar.color, account.displayName));
+        if (!comp.rrule) {
+          events.push({
+            ...normalizeIcalEvent(comp, calendar.id, account.id, calendar.url, calendar.color, account.displayName),
+            repeat: 'none',
+            repeatUntil: null,
+          });
+          continue;
+        }
+        events.push(...expandSeries(comp, timeMin, timeMax, calendar, account));
       }
     } catch { /* skip unparseable */ }
   }
   return events;
+}
+
+// One event per occurrence of a repeating event within the window, with
+// excluded dates skipped and individually edited occurrences in place of the
+// ones they replace. Each carries the start it had in the series
+// (occurrenceStart), which is how a "This event" edit names it.
+function expandSeries(comp, timeMin, timeMax, calendar, account) {
+  const allDay = comp.datetype === 'date';
+  const { repeat, repeatUntil } = parseRrule(comp.rrule.toString(), comp.start.tz);
+  const instances = ical.expandRecurringEvent(comp, {
+    from: new Date(timeMin),
+    to: new Date(timeMax),
+    expandOngoing: true,
+  });
+  return instances.map((inst) => {
+    const original = inst.isOverride ? inst.event.recurrenceid : inst.start;
+    const occurrenceStart = allDay ? localYmd(original) : original.toISOString();
+    const base = normalizeIcalEvent(
+      { ...inst.event, uid: comp.uid, start: inst.start, end: inst.end, datetype: comp.datetype },
+      calendar.id, account.id, calendar.url, calendar.color, account.displayName
+    );
+    return {
+      ...base,
+      id: `cdav-${comp.uid}-${occurrenceStart}`,
+      recurring: true,
+      seriesId: String(comp.uid),
+      occurrenceStart,
+      repeat,
+      repeatUntil,
+    };
+  });
 }
 
 // ── iCal generation ──
@@ -248,24 +288,37 @@ function addOneDay(ymd) {
   return d.toISOString().slice(0, 10);
 }
 
-function buildIcal(uid, { title, start, end, allDay, description, location }) {
-  const dtstamp = toIcalUtc(new Date().toISOString());
-  const lines = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Unified Calendar//EN',
-    'BEGIN:VEVENT', `UID:${uid}`, `DTSTAMP:${dtstamp}`,
-  ];
+// The lines of one VEVENT. A repeating timed event is written in the user's
+// time zone (DTSTART;TZID=...), so its occurrences keep their local time across
+// daylight-saving changes; everything else stays in UTC, as before.
+function veventLines(uid, eventData, extra = []) {
+  const { title, start, end, allDay, description, location, timeZone, repeat, repeatUntil } = eventData;
+  const rrule = eventData.rrule !== undefined ? eventData.rrule : buildRrule({ repeat, repeatUntil, allDay, timeZone });
+  const lines = ['BEGIN:VEVENT', `UID:${uid}`, `DTSTAMP:${toIcalUtc(new Date().toISOString())}`, ...extra];
   if (allDay) {
     lines.push(`DTSTART;VALUE=DATE:${(start || '').replace(/-/g, '')}`);
     lines.push(`DTEND;VALUE=DATE:${addOneDay(end || start).replace(/-/g, '')}`);
+  } else if (rrule && timeZone) {
+    lines.push(`DTSTART;TZID=${timeZone}:${toIcalLocal(start, timeZone)}`);
+    lines.push(`DTEND;TZID=${timeZone}:${toIcalLocal(end || start, timeZone)}`);
   } else {
     lines.push(`DTSTART:${toIcalUtc(start)}`);
     lines.push(`DTEND:${toIcalUtc(end || start)}`);
   }
+  if (rrule) lines.push(rrule);
   lines.push(`SUMMARY:${escText(title)}`);
   if (description) lines.push(`DESCRIPTION:${escText(description)}`);
   if (location) lines.push(`LOCATION:${escText(location)}`);
-  lines.push('END:VEVENT', 'END:VCALENDAR');
-  return lines.join('\r\n');
+  lines.push('END:VEVENT');
+  return lines;
+}
+
+function wrapCalendar(lines) {
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Unified Calendar//EN', ...lines, 'END:VCALENDAR'].join('\r\n');
+}
+
+function buildIcal(uid, eventData) {
+  return wrapCalendar(veventLines(uid, eventData));
 }
 
 function makeEvent(uid, eventData, calendar, account) {
@@ -347,4 +400,198 @@ export async function deleteCalDavEvent(account, uid, calUrl) {
     headers: { Authorization: basicAuth(account.username, account.password) },
     validateStatus: (s) => (s >= 200 && s < 300) || s === 404,
   });
+}
+
+// ── Repeating events ──
+//
+// A repeating event is one .ics file: the series VEVENT (with RRULE and any
+// EXDATE lines) plus one VEVENT per individually edited occurrence, each named
+// by a RECURRENCE-ID. These functions edit that file in place, line by line,
+// so properties this app does not know about (alarms, attendees, categories)
+// survive the edit.
+
+async function getIcal(account, calUrl, uid) {
+  const resp = await axios.request({
+    method: 'GET',
+    url: eventUrl(calUrl, uid),
+    headers: { Authorization: basicAuth(account.username, account.password) },
+    responseType: 'text',
+    transformResponse: (d) => d,
+    validateStatus: (s) => s >= 200 && s < 300,
+  });
+  return String(resp.data);
+}
+
+async function putIcal(account, calUrl, uid, lines) {
+  await axios.request({
+    method: 'PUT',
+    url: eventUrl(calUrl, uid),
+    data: lines.map(foldLine).join('\r\n'),
+    headers: {
+      Authorization: basicAuth(account.username, account.password),
+      'Content-Type': 'text/calendar; charset=utf-8',
+    },
+    validateStatus: (s) => s >= 200 && s < 300,
+  });
+}
+
+// Long lines continue on the next line after a space (RFC 5545 3.1).
+function unfoldLines(text) {
+  return text.replace(/\r?\n[ \t]/g, '').split(/\r?\n/).filter((l) => l !== '');
+}
+
+function foldLine(line) {
+  if (line.length <= 74) return line;
+  const parts = [];
+  for (let i = 0; i < line.length; i += 73) parts.push(line.slice(i, i + 73));
+  return parts.join('\r\n ');
+}
+
+// 'DTSTART;TZID=Europe/Ljubljana:20261007T090000' → name, params, value.
+function splitLine(line) {
+  const m = line.match(/^([A-Za-z-]+)((?:;[^:"]*(?:"[^"]*"[^:"]*)*)*):(.*)$/);
+  return m ? { name: m[1].toUpperCase(), params: m[2], value: m[3] } : { name: '', params: '', value: '' };
+}
+
+function propLine(block, name) {
+  return block.find((l) => splitLine(l).name === name) || null;
+}
+
+// The VEVENT blocks of a file, as index ranges into its lines.
+function veventBlocks(lines) {
+  const blocks = [];
+  let start = -1;
+  lines.forEach((l, i) => {
+    if (l === 'BEGIN:VEVENT') start = i;
+    else if (l === 'END:VEVENT' && start >= 0) {
+      const body = lines.slice(start, i + 1);
+      blocks.push({ start, end: i, body, recurrenceId: propLine(body, 'RECURRENCE-ID') });
+      start = -1;
+    }
+  });
+  return blocks;
+}
+
+function seriesBlock(lines) {
+  const block = veventBlocks(lines).find((b) => !b.recurrenceId && propLine(b.body, 'RRULE'));
+  if (!block) throw new Error('This event no longer repeats on the server; refresh and try again.');
+  return block;
+}
+
+function isIanaZone(tz) {
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
+}
+
+// A RECURRENCE-ID or EXDATE line naming one occurrence, written the way the
+// series writes its DTSTART (a date, a time in a zone, or UTC), which is how
+// servers and other clients match it to the occurrence.
+function occurrenceLine(name, seriesDtstart, occurrenceStart, fallbackTz) {
+  const { params, value } = splitLine(seriesDtstart);
+  if (/VALUE=DATE(?!-)/i.test(params)) return `${name};VALUE=DATE:${occurrenceStart.slice(0, 10).replace(/-/g, '')}`;
+  const tzid = params.match(/TZID=("?)([^;:"]+)\1/i)?.[2];
+  if (tzid) {
+    const zone = isIanaZone(tzid) ? tzid : fallbackTz;
+    return `${name};TZID=${tzid}:${toIcalLocal(occurrenceStart, zone)}`;
+  }
+  if (value.endsWith('Z')) return `${name}:${toIcalUtc(occurrenceStart)}`;
+  return `${name}:${toIcalLocal(occurrenceStart, fallbackTz)}`;
+}
+
+function withoutOverride(lines, ridValue) {
+  const drop = veventBlocks(lines).find((b) => b.recurrenceId && splitLine(b.recurrenceId).value === ridValue);
+  return drop ? [...lines.slice(0, drop.start), ...lines.slice(drop.end + 1)] : lines;
+}
+
+function insertBeforeCalendarEnd(lines, extra) {
+  const end = lines.lastIndexOf('END:VCALENDAR');
+  return [...lines.slice(0, end), ...extra, ...lines.slice(end)];
+}
+
+// "This event": write one occurrence's own times and details as an override
+// of the series, replacing any earlier override of the same occurrence.
+export async function updateCalDavOccurrence(account, calendar, uid, occurrenceStart, eventData) {
+  let lines = unfoldLines(await getIcal(account, calendar.url, uid));
+  const series = seriesBlock(lines);
+  const tz = eventData.timeZone || 'UTC';
+  const rid = occurrenceLine('RECURRENCE-ID', propLine(series.body, 'DTSTART'), occurrenceStart, tz);
+  lines = withoutOverride(lines, splitLine(rid).value);
+  lines = insertBeforeCalendarEnd(lines, veventLines(uid, { ...eventData, rrule: null }, [rid]));
+  await putIcal(account, calendar.url, uid, lines);
+}
+
+// "This event" delete: exclude the occurrence from the series.
+export async function deleteCalDavOccurrence(account, calendar, uid, occurrenceStart, timeZone) {
+  let lines = unfoldLines(await getIcal(account, calendar.url, uid));
+  const series = seriesBlock(lines);
+  const exdate = occurrenceLine('EXDATE', propLine(series.body, 'DTSTART'), occurrenceStart, timeZone || 'UTC');
+  lines = withoutOverride(lines, splitLine(occurrenceLine('RECURRENCE-ID', propLine(series.body, 'DTSTART'), occurrenceStart, timeZone || 'UTC')).value);
+  const { end } = seriesBlock(lines);
+  lines = [...lines.slice(0, end), exdate, ...lines.slice(end)];
+  await putIcal(account, calendar.url, uid, lines);
+}
+
+// "All events": edit the series. It moves by as many days as the edited
+// occurrence did and takes its time and duration (see shiftSeries); the repeat
+// changes only when the form changed it. When the series start moves, its
+// excluded dates and edited occurrences no longer line up with the new
+// occurrences, so they are dropped, as Google does.
+export async function updateCalDavSeries(account, calendar, uid, occurrenceStart, eventData) {
+  const text = await getIcal(account, calendar.url, uid);
+  let lines = unfoldLines(text);
+  const series = seriesBlock(lines);
+  const comp = Object.values(ical.parseICS(text)).find((c) => c?.type === 'VEVENT' && c.rrule);
+  const seriesAllDay = comp?.datetype === 'date';
+  const tz = eventData.timeZone || (isIanaZone(comp?.start?.tz) ? comp.start.tz : 'UTC');
+  const seriesStart = seriesAllDay ? localYmd(comp.start) : comp.start.toISOString();
+  const shifted = shiftSeries({
+    seriesStart, occurrenceStart, start: eventData.start, end: eventData.end, allDay: eventData.allDay, timeZone: tz,
+  });
+
+  const oldRule = propLine(series.body, 'RRULE');
+  let rrule;
+  if (eventData.repeat === undefined || eventData.repeat === 'custom') {
+    // A simple rule is rebuilt from the new start, so a weekday or month day
+    // named in it (BYDAY=WE) follows the series when it moves.
+    const { repeat, repeatUntil } = parseRrule(oldRule, tz);
+    rrule = repeat === 'custom' ? oldRule : buildRrule({ repeat, repeatUntil, allDay: eventData.allDay, timeZone: tz });
+  } else {
+    rrule = buildRrule({ repeat: eventData.repeat, repeatUntil: eventData.repeatUntil, allDay: eventData.allDay, timeZone: tz });
+  }
+
+  const times = eventData.allDay
+    ? [`DTSTART;VALUE=DATE:${shifted.start.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${shifted.endExclusive.replace(/-/g, '')}`]
+    : [`DTSTART;TZID=${tz}:${shifted.start.replace(/[-:]/g, '')}`, `DTEND;TZID=${tz}:${shifted.end.replace(/[-:]/g, '')}`];
+  const startMoved = eventData.allDay
+    ? !seriesAllDay || shifted.start !== seriesStart
+    : seriesAllDay || zonedToUtc(shifted.start, tz).getTime() !== comp.start.getTime();
+  const keepExceptions = rrule && !startMoved;
+
+  const replaced = new Set(['DTSTART', 'DTEND', 'DURATION', 'RRULE', 'SUMMARY', 'DESCRIPTION', 'LOCATION', 'DTSTAMP']);
+  if (!keepExceptions) replaced.add('EXDATE');
+  // Only the event's own lines; a nested VALARM keeps its DESCRIPTION.
+  let depth = 0;
+  const kept = series.body.slice(1, -1).filter((l) => {
+    if (l.startsWith('BEGIN:')) depth++;
+    const own = depth === 0;
+    if (l.startsWith('END:')) depth--;
+    return !own || !replaced.has(splitLine(l).name);
+  });
+  const uidAt = kept.findIndex((l) => splitLine(l).name === 'UID');
+  const fresh = [
+    `DTSTAMP:${toIcalUtc(new Date().toISOString())}`,
+    ...times,
+    ...(rrule ? [rrule] : []),
+    `SUMMARY:${escText(eventData.title)}`,
+    ...(eventData.description ? [`DESCRIPTION:${escText(eventData.description)}`] : []),
+    ...(eventData.location ? [`LOCATION:${escText(eventData.location)}`] : []),
+  ];
+  const body = ['BEGIN:VEVENT', ...kept.slice(0, uidAt + 1), ...fresh, ...kept.slice(uidAt + 1), 'END:VEVENT'];
+
+  lines = [...lines.slice(0, series.start), ...body, ...lines.slice(series.end + 1)];
+  if (!keepExceptions) {
+    for (const b of veventBlocks(lines).filter((b) => b.recurrenceId).reverse()) {
+      lines = [...lines.slice(0, b.start), ...lines.slice(b.end + 1)];
+    }
+  }
+  await putIcal(account, calendar.url, uid, lines);
 }

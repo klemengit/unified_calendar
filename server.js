@@ -16,8 +16,11 @@ import {
   createGoogleEvent,
   updateGoogleEvent,
   deleteGoogleEvent,
+  getGoogleSeriesRepeat,
+  updateGoogleSeries,
   COLORS,
 } from './src/calendar.js';
+import { buildRrule, REPEATS } from './src/recurrence.js';
 import {
   loadFeeds,
   getFeeds,
@@ -51,6 +54,9 @@ import {
   updateCalDavEvent,
   moveCalDavEvent,
   deleteCalDavEvent,
+  updateCalDavOccurrence,
+  updateCalDavSeries,
+  deleteCalDavOccurrence,
 } from './src/caldav.js';
 import { registerWidgetRoutes, importantBodyError } from './src/widget-routes.js';
 import {
@@ -359,6 +365,42 @@ function normalizeAttendees(input) {
   return [...seen];
 }
 
+// ── Repeating events ──
+//
+// The event form sends `repeat` ('none', 'weekly', 'monthly', 'yearly', or
+// 'custom' for a rule it cannot show, which is left alone), an optional
+// `repeatUntil` date and the browser's `timeZone`. Editing one occurrence of a
+// series also sends `scope` ('this' or 'all') and the occurrence's original
+// start (`occurrenceStart`), plus the Google series id (`seriesId`).
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isTimeZone(tz) {
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
+}
+
+// The repeat fields of a request body, checked; `error` is set when invalid.
+function repeatFields(body) {
+  const { repeat, repeatUntil, timeZone, scope, occurrenceStart, seriesId } = body || {};
+  if (repeat !== undefined && repeat !== 'none' && repeat !== 'custom' && !REPEATS[repeat])
+    return { error: 'repeat must be none, weekly, monthly or yearly' };
+  if (repeatUntil != null && repeatUntil !== '' && !YMD_RE.test(repeatUntil))
+    return { error: 'repeatUntil must be a YYYY-MM-DD date' };
+  if (timeZone !== undefined && (typeof timeZone !== 'string' || !isTimeZone(timeZone)))
+    return { error: 'timeZone must be an IANA time zone' };
+  if (scope !== undefined && scope !== 'this' && scope !== 'all')
+    return { error: 'scope must be this or all' };
+  if (scope && !occurrenceStart) return { error: 'occurrenceStart is required with scope' };
+  return { repeat, repeatUntil: repeatUntil || null, timeZone, scope, occurrenceStart, seriesId };
+}
+
+// The form's repeat as Google's recurrence list; undefined leaves it alone.
+function googleRecurrence({ repeat, repeatUntil, timeZone }, allDay) {
+  if (repeat === undefined || repeat === 'custom') return undefined;
+  const rule = buildRrule({ repeat, repeatUntil, allDay, timeZone });
+  return rule ? [rule] : [];
+}
+
 function googleWriteError(err) {
   if (err.response?.status === 403)
     return { status: 403, message: 'Google Calendar write access denied. Reconnect Google in Settings.' };
@@ -374,7 +416,12 @@ app.post('/api/google/events', async (req, res) => {
     const fresh = await freshToken('google', req);
     const googleId = googleIdFromCalId(calId);
     const color = getGoogleCalColor(calId);
-    const event = await createGoogleEvent(fresh, calId, googleId, color, { title, start, end, allDay, location, description, attendees });
+    const rf = repeatFields(req.body);
+    if (rf.error) return res.status(400).json({ error: rf.error });
+    const event = await createGoogleEvent(fresh, calId, googleId, color, {
+      title, start, end, allDay, location, description, attendees,
+      timeZone: rf.timeZone, recurrence: googleRecurrence(rf, allDay),
+    });
     res.status(201).json({ event });
   } catch (err) {
     const { status, message } = googleWriteError(err);
@@ -391,8 +438,36 @@ app.put('/api/google/events/:eventId', async (req, res) => {
     const fresh = await freshToken('google', req);
     const googleId = googleIdFromCalId(calId);
     const color = getGoogleCalColor(calId);
-    const event = await updateGoogleEvent(fresh, calId, googleId, color, req.params.eventId, { title, start, end, allDay, location, description, attendees });
+    const rf = repeatFields(req.body);
+    if (rf.error) return res.status(400).json({ error: rf.error });
+    const eventData = { title, start, end, allDay, location, description, attendees, timeZone: rf.timeZone };
+    let event;
+    if (rf.scope === 'all') {
+      if (!rf.seriesId) return res.status(400).json({ error: 'seriesId is required with scope all' });
+      event = await updateGoogleSeries(fresh, calId, googleId, color, rf.seriesId, rf.occurrenceStart, {
+        ...eventData, recurrence: googleRecurrence(rf, allDay),
+      });
+    } else {
+      // One occurrence ('this') keeps the series' repeat; a plain event may gain one.
+      const recurrence = rf.scope === 'this' ? undefined : googleRecurrence(rf, allDay);
+      event = await updateGoogleEvent(fresh, calId, googleId, color, req.params.eventId, { ...eventData, recurrence });
+    }
     res.json({ event });
+  } catch (err) {
+    const { status, message } = googleWriteError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+// The repeat of a Google series, for the event form: Google lists occurrences
+// only, without the rule.
+app.get('/api/google/series/:seriesId', async (req, res) => {
+  if (!req.session.tokens?.google) return res.status(401).json({ error: 'Google not connected' });
+  const { calId, timeZone } = req.query;
+  if (!calId) return res.status(400).json({ error: 'calId query param required' });
+  try {
+    const fresh = await freshToken('google', req);
+    res.json(await getGoogleSeriesRepeat(fresh, googleIdFromCalId(calId), req.params.seriesId, isTimeZone(timeZone) ? timeZone : undefined));
   } catch (err) {
     const { status, message } = googleWriteError(err);
     res.status(status).json({ error: message });
@@ -553,7 +628,12 @@ app.post('/api/caldav/events', async (req, res) => {
   const found = findCaldavCalendar(calId);
   if (!found) return res.status(404).json({ error: 'Unknown CalDAV calendar' });
   try {
-    const event = await createCalDavEvent(found.account, found.calendar, { title, start, end, allDay, location, description });
+    const rf = repeatFields(req.body);
+    if (rf.error) return res.status(400).json({ error: rf.error });
+    const event = await createCalDavEvent(found.account, found.calendar, {
+      title, start, end, allDay, location, description,
+      timeZone: rf.timeZone, repeat: rf.repeat, repeatUntil: rf.repeatUntil,
+    });
     res.status(201).json({ event });
   } catch (err) {
     const { status, message } = caldavWriteError(err);
@@ -574,9 +654,25 @@ app.put('/api/caldav/events/:uid', async (req, res) => {
       return res.status(400).json({ error: 'Events can only move between calendars of the same CalDAV account' });
     }
   }
+  const rf = repeatFields(req.body);
+  if (rf.error) return res.status(400).json({ error: rf.error });
+  // One occurrence cannot live in another calendar than its series.
+  if (rf.scope === 'this' && from) return res.status(400).json({ error: 'Move the whole series to change its calendar' });
+  const eventData = {
+    title, start, end, allDay, location, description,
+    timeZone: rf.timeZone, repeat: rf.repeat, repeatUntil: rf.repeatUntil,
+  };
   try {
     if (from) await moveCalDavEvent(found.account, req.params.uid, from.calendar.url, found.calendar.url);
-    const event = await updateCalDavEvent(found.account, found.calendar, req.params.uid, { title, start, end, allDay, location, description });
+    if (rf.scope === 'this') {
+      await updateCalDavOccurrence(found.account, found.calendar, req.params.uid, rf.occurrenceStart, eventData);
+      return res.json({ ok: true });
+    }
+    if (rf.scope === 'all') {
+      await updateCalDavSeries(found.account, found.calendar, req.params.uid, rf.occurrenceStart, eventData);
+      return res.json({ ok: true });
+    }
+    const event = await updateCalDavEvent(found.account, found.calendar, req.params.uid, eventData);
     res.json({ event });
   } catch (err) {
     const { status, message } = caldavWriteError(err);
@@ -589,7 +685,14 @@ app.delete('/api/caldav/events/:uid', async (req, res) => {
   if (!calId) return res.status(400).json({ error: 'calId query param required' });
   const found = findCaldavCalendar(calId);
   if (!found) return res.status(404).json({ error: 'Unknown CalDAV calendar' });
+  const { scope, occurrenceStart, timeZone } = req.query;
   try {
+    // scope=this removes one occurrence of a series; otherwise the whole event goes.
+    if (scope === 'this') {
+      if (!occurrenceStart) return res.status(400).json({ error: 'occurrenceStart is required with scope this' });
+      await deleteCalDavOccurrence(found.account, found.calendar, req.params.uid, occurrenceStart, isTimeZone(timeZone) ? timeZone : undefined);
+      return res.json({ ok: true });
+    }
     await deleteCalDavEvent(found.account, req.params.uid, found.calendar.url);
     res.json({ ok: true });
   } catch (err) {

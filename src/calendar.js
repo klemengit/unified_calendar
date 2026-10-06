@@ -2,6 +2,7 @@ import axios from 'axios';
 import { config } from './config.js';
 import { fetchIcsEvents } from './ics.js';
 import { fetchCalDavEvents } from './caldav.js';
+import { buildRrule, parseRrule, shiftSeries, toZonedIso } from './recurrence.js';
 
 export const COLORS = { microsoft: '#2563eb', google: '#16a34a' };
 
@@ -65,7 +66,7 @@ function addOneDayToDateStr(dateStr) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function buildGCalBody({ title, start, end, allDay, description, location, attendees }) {
+function buildGCalBody({ title, start, end, allDay, description, location, attendees, timeZone, recurrence }) {
   const body = {
     summary: title,
     description: description || '',
@@ -75,10 +76,17 @@ function buildGCalBody({ title, start, end, allDay, description, location, atten
     // end from client is inclusive; Google needs exclusive (add 1 day)
     body.start = { date: start };
     body.end = { date: addOneDayToDateStr(end || start) };
+  } else if (timeZone) {
+    // A repeating event needs its zone: Google refuses one without, and a UTC
+    // time would shift by an hour across daylight-saving changes.
+    body.start = { dateTime: toZonedIso(start, timeZone), timeZone };
+    body.end = { dateTime: toZonedIso(end || start, timeZone), timeZone };
   } else {
     body.start = { dateTime: start };
     body.end = { dateTime: end || start };
   }
+  // Absent leaves the repeat alone; an empty array removes it.
+  if (Array.isArray(recurrence)) body.recurrence = recurrence;
   // Absent means "leave the guest list alone"; an empty array clears it.
   if (Array.isArray(attendees)) body.attendees = attendees.map((email) => ({ email }));
   return body;
@@ -118,6 +126,11 @@ function googleEventToUnified(e, calId, googleId, color) {
     location: e.location || '',
     description: (e.description || '').trim(),
     attendees: attendeesToUnified(e.attendees),
+    // An occurrence of a repeating event: the series it belongs to and the
+    // start it had before any edit, which "All events" edits measure from.
+    recurring: Boolean(e.recurringEventId),
+    seriesId: e.recurringEventId || null,
+    occurrenceStart: e.originalStartTime?.dateTime || e.originalStartTime?.date || null,
   };
 }
 
@@ -153,6 +166,63 @@ export async function updateGoogleEvent(token, calId, googleId, color, eventId, 
     buildGCalBody(eventData),
     { headers: { Authorization: `Bearer ${token.accessToken}` }, params: updatesParam(eventData) }
   );
+  return googleEventToUnified(data, calId, googleId, color);
+}
+
+function seriesUrl(googleId, seriesId) {
+  return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleId)}/events/${encodeURIComponent(seriesId)}`;
+}
+
+// The repeat of a series, in the event form's terms ({ repeat, repeatUntil }).
+// Google lists occurrences only, so the form asks for this when it opens one.
+export async function getGoogleSeriesRepeat(token, googleId, seriesId, timeZone) {
+  const { data } = await axios.get(seriesUrl(googleId, seriesId), {
+    headers: { Authorization: `Bearer ${token.accessToken}` },
+  });
+  const rule = (data.recurrence || []).find((r) => /^RRULE:/i.test(r));
+  return parseRrule(rule, data.start?.timeZone || timeZone);
+}
+
+// "All events": edit the series an occurrence belongs to. The series start
+// moves by as many days as the occurrence did (see shiftSeries), and the
+// repeat changes only when eventData.recurrence says so.
+export async function updateGoogleSeries(token, calId, googleId, color, seriesId, occurrenceStart, eventData) {
+  const headers = { Authorization: `Bearer ${token.accessToken}` };
+  const { data: series } = await axios.get(seriesUrl(googleId, seriesId), { headers });
+  const timeZone = eventData.timeZone || series.start?.timeZone || 'UTC';
+  const shifted = shiftSeries({
+    seriesStart: series.start.dateTime || series.start.date,
+    occurrenceStart,
+    start: eventData.start,
+    end: eventData.end,
+    allDay: eventData.allDay,
+    timeZone,
+  });
+
+  const body = buildGCalBody({ ...eventData, timeZone: undefined });
+  if (eventData.allDay) {
+    body.start = { date: shifted.start, dateTime: null, timeZone: null };
+    body.end = { date: shifted.endExclusive, dateTime: null, timeZone: null };
+  } else {
+    body.start = { dateTime: shifted.start, timeZone, date: null };
+    body.end = { dateTime: shifted.end, timeZone, date: null };
+  }
+  // When the form left the repeat alone, a simple rule is still rebuilt from
+  // the new start: a weekday named in it (BYDAY=WE) follows the series when it
+  // moves, and UNTIL switches between a date and a time with all-day.
+  if (!Array.isArray(eventData.recurrence)) {
+    const rule = (series.recurrence || []).find((r) => /^RRULE:/i.test(r));
+    const { repeat, repeatUntil } = parseRrule(rule, timeZone);
+    if (repeat !== 'custom') {
+      body.recurrence = [buildRrule({ repeat, repeatUntil, allDay: eventData.allDay, timeZone })].filter(Boolean);
+    }
+  }
+  // Keep the series' EXDATE / RDATE lines alongside a new rule.
+  if (body.recurrence?.length) {
+    body.recurrence.push(...(series.recurrence || []).filter((r) => !/^RRULE:/i.test(r)));
+  }
+
+  const { data } = await axios.patch(seriesUrl(googleId, seriesId), body, { headers, params: updatesParam(eventData) });
   return googleEventToUnified(data, calId, googleId, color);
 }
 
