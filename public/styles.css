@@ -469,6 +469,15 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 }
 
 
+/* Short windows: less padding around and inside modals. */
+@media (max-height: 800px) {
+  .modal-overlay { padding: 10px; }
+  .modal { padding: 16px 20px 20px; }
+  .ef-actions { bottom: -20px; padding-bottom: 20px; margin-bottom: -20px; }
+  .event-form h3 { margin-bottom: 10px; }
+  .form-field { margin-bottom: 8px; }
+}
+
 @media (max-width: 768px) {
   main { padding: 8px 8px 0 56px; }
   #calendar { padding: 8px; border-radius: 8px; }
@@ -723,6 +732,10 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   padding: 24px 26px;
   max-width: 460px;
   width: 100%;
+  /* Never taller than the window: a long form or description scrolls inside
+     the modal instead of running off the top and bottom of the screen. */
+  max-height: 100%;
+  overflow-y: auto;
   position: relative;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
 }
@@ -897,7 +910,7 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   background: var(--card);
   color: var(--text);
 }
-.form-field textarea { resize: vertical; }
+.form-field textarea { resize: vertical; max-height: 40vh; }
 .field-hint { font-size: 0.75rem; color: var(--muted); }
 .form-field input:disabled { background: var(--bg); color: var(--muted); }
 
@@ -909,6 +922,13 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+  /* Save and Cancel stay in view while the form scrolls; the negative bottom
+     and padding cover the modal's own 24px bottom padding. */
+  position: sticky;
+  bottom: -24px;
+  padding-bottom: 24px;
+  margin-bottom: -24px;
+  background: var(--card);
 }
 .ef-actions-right { display: flex; gap: 8px; }
 
