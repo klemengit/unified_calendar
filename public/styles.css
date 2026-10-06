@@ -529,6 +529,12 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   text-overflow: ellipsis;
 }
 
+/* ── Day and Week all-day row ──
+   FullCalendar keeps 2em open for all-day events even when there are none;
+   one line's worth is enough, and the row still grows with its events. */
+.fc .fc-timegrid .fc-daygrid-body .fc-daygrid-day-events { min-height: 1.4em; margin-bottom: 0; }
+.fc .fc-timegrid-divider { padding: 0 0 1px; }
+
 /* ── Day and Week rows ──
    app.js sets --slot-height so its 12-hour window fills the visible grid.
    The labels get line-height 1 so they never hold a short row open. */
