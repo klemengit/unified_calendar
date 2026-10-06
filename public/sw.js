@@ -1,5 +1,5 @@
 // Bump CACHE_NAME to invalidate all cached assets after an app update.
-const CACHE_NAME = 'cal-v15';
+const CACHE_NAME = 'cal-v16';
 
 self.addEventListener('install', () => self.skipWaiting());
 
