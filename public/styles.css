@@ -506,6 +506,12 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   text-overflow: ellipsis;
 }
 
+/* ── Day and Week rows ──
+   app.js sets --slot-height so its 12-hour window fills the visible grid.
+   The labels get line-height 1 so they never hold a short row open. */
+#calendar .fc-timegrid-slot { height: var(--slot-height, 1.5em); }
+#calendar .fc-timegrid-slot-label-cushion { line-height: 1; }
+
 /* ── View dropdown (replaces the view buttons at 1280px and below) ── */
 .view-menu {
   position: fixed;

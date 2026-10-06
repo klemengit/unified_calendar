@@ -506,6 +506,44 @@ function toggleViewMenu(button) {
   document.addEventListener('pointerdown', onViewMenuOutside, true);
 }
 
+// ── Working hours fill the time grid ──
+//
+// In the Day and Week views the rows are sized so VISIBLE_HOURS exactly fill
+// the visible grid on any screen. The grid opens scrolled to 07:00, or to the
+// current hour when that is earlier, so the window ends at 19:00 or earlier.
+// The other hours are still there, by scrolling.
+
+const LATEST_START_HOUR = 7;
+const VISIBLE_HOURS = 12;
+const SLOTS_PER_HOUR = 2; // FullCalendar's default 30-minute slotDuration
+const MIN_SLOT_PX = 12;
+
+function visibleStartHour() {
+  return Math.min(LATEST_START_HOUR, new Date().getHours());
+}
+
+let slotMinTimeSpelling = '00:00:00';
+
+function fitWorkHours() {
+  if (!calendar || !calendar.view.type.startsWith('timeGrid')) return;
+  const root = document.getElementById('calendar');
+  const scroller = root.querySelector('.fc-timegrid-body')?.closest('.fc-scroller');
+  if (!scroller || !scroller.clientHeight) return;
+
+  // One extra slot keeps the last hour's line and label clear of the edge.
+  const slots = VISIBLE_HOURS * SLOTS_PER_HOUR + 1;
+  const px = `${Math.max(MIN_SLOT_PX, Math.floor(scroller.clientHeight / slots))}px`;
+  if (root.style.getPropertyValue('--slot-height') === px) return;
+
+  root.style.setProperty('--slot-height', px);
+  // FullCalendar only re-measures the rows when their definition changes, and
+  // neither updateSize() nor render() counts. Re-setting slotMinTime to the
+  // same time, spelled differently, does.
+  slotMinTimeSpelling = slotMinTimeSpelling === '00:00:00' ? '00:00' : '00:00:00';
+  calendar.setOption('slotMinTime', slotMinTimeSpelling);
+  calendar.scrollToTime({ hours: visibleStartHour() });
+}
+
 // Strictly-before-today (local midnight) test shared by dayCellClassNames.
 function isSpentDate(date) {
   const today = new Date();
@@ -629,7 +667,8 @@ function initCalendar() {
     },
     allDayText: '',
     height: '100%',
-    scrollTime: '05:00:00',
+    scrollTime: { hours: visibleStartHour() },
+    windowResize: () => fitWorkHours(),
     nowIndicator: true,
     dayMaxEvents: true,
     selectable: true,
@@ -660,11 +699,13 @@ function initCalendar() {
       syncJumpToSelectors();
       updateCompactClass(arg.view.type);
       updateViewMenuLabel(arg.view.type);
+      requestAnimationFrame(fitWorkHours);
       try { localStorage.setItem(LAST_VIEW_KEY, arg.view.type); } catch { /* private mode, quota, etc. */ }
       updateImportantDayCounts();
     },
     eventsSet: () => {
       updateImportantDayCounts();
+      requestAnimationFrame(fitWorkHours);
     },
   });
   calendar.render();
@@ -673,14 +714,20 @@ function initCalendar() {
   // calendar, so FullCalendar would keep its old measurements and draw events
   // off their time slots. Keep this query in step with the @media block there.
   window.matchMedia?.('(min-width: 769px) and (max-width: 1280px), (min-width: 769px) and (max-height: 800px)')
-    .addEventListener?.('change', () => requestAnimationFrame(() => calendar.updateSize()));
+    .addEventListener?.('change', () => requestAnimationFrame(() => {
+      calendar.updateSize();
+      fitWorkHours();
+    }));
 
   // FullCalendar only re-measures on window resize. The sidebar sliding open or
-  // shut resizes it without one.
+  // shut, and all-day events growing the header, resize it without one.
   let resizeFrame = 0;
   new ResizeObserver(() => {
     cancelAnimationFrame(resizeFrame);
-    resizeFrame = requestAnimationFrame(() => calendar.updateSize());
+    resizeFrame = requestAnimationFrame(() => {
+      calendar.updateSize();
+      fitWorkHours();
+    });
   }).observe(document.getElementById('calendar'));
 
   window.matchMedia?.(VIEW_MENU_QUERY).addEventListener?.('change', (e) => {
