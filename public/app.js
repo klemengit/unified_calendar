@@ -443,7 +443,8 @@ function buildToolbarRight(enabledViews) {
 //
 // On smaller screens the row of view buttons wraps the toolbar onto two
 // lines, so below VIEW_MENU_QUERY it becomes a single "Week ▾" button that
-// opens a menu of the same views.
+// opens a menu of the same views. The closed drawer sidebar is hidden there
+// too, so the toolbar also carries the ☰ that opens it.
 
 const VIEW_MENU_QUERY = '(max-width: 1280px)';
 
@@ -463,7 +464,7 @@ function isViewMenuWidth() {
 
 function headerToolbarFor(useMenu) {
   return {
-    left: 'prev,next today',
+    left: useMenu ? 'sidebarToggle prev,next today' : 'prev,next today',
     center: 'title',
     right: useMenu ? 'viewMenu' : buildToolbarRight(settings.enabledViews),
   };
@@ -697,6 +698,7 @@ function initCalendar() {
     headerToolbar: headerToolbarFor(isViewMenuWidth()),
     customButtons: {
       viewMenu: { text: 'View', hint: 'Change view', click: (ev) => toggleViewMenu(ev.currentTarget) },
+      sidebarToggle: { text: '☰', hint: 'Show sidebar', click: () => applySidebarCollapsed(false) },
     },
     allDayText: '',
     height: '100%',

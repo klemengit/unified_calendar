@@ -427,8 +427,8 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 /* ── Sidebar as a drawer: 1280px and below ──
    A docked sidebar costs the calendar too much width here, so the open
    sidebar slides over the calendar instead of pushing it aside. app.js
-   starts it collapsed at these widths. main keeps room on the left for the
-   collapsed ☰ strip. */
+   starts it collapsed at these widths. Closed, the sidebar is hidden and the
+   calendar toolbar's own ☰ opens it, so it takes no width. */
 @media (max-width: 1280px) {
   .sidebar {
     position: fixed;
@@ -443,8 +443,9 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
     box-shadow: 4px 0 20px rgba(0, 0, 0, 0.18);
     z-index: 200;
   }
+  body.sidebar-collapsed .sidebar { display: none; }
   body:not(.sidebar-collapsed) .sidebar-backdrop { display: block; }
-  main { padding: 12px 12px 12px 56px; }
+  main { padding: 12px; }
 }
 
 
@@ -479,7 +480,7 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 }
 
 @media (max-width: 768px) {
-  main { padding: 8px 8px 0 56px; }
+  main { padding: 8px 8px 0; }
   #calendar { padding: 8px; border-radius: 8px; }
 
   /* FullCalendar mobile tweaks */
