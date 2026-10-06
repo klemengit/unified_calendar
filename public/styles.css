@@ -315,6 +315,7 @@ main { padding: 20px 24px; flex: 1; min-width: 0; overflow: hidden; height: 100%
    wrapper the markup places them in. */
 .sidebar #sidebar-toggle { align-self: flex-start; flex: 0 0 auto; }
 .sidebar #status { flex-wrap: wrap; gap: 6px; }
+.sidebar #status .chip { max-width: 100%; overflow: hidden; white-space: nowrap; }
 .sidebar .jump-to { width: 100%; gap: 6px; }
 .sidebar .jump-to select { flex: 1 1 0; min-width: 0; }
 .sidebar #last-synced { display: block; white-space: normal; }
@@ -378,9 +379,7 @@ main { padding: 20px 24px; flex: 1; min-width: 0; overflow: hidden; height: 100%
 .provider-link-btn:hover { background: var(--hover-strong); }
 
 /* ── Sidebar toggle (hamburger) ──
-   Round 1: mobile-only off-canvas opener (desktop: hidden).
-   Round 2: also the desktop expanded⇄rail switch (4e), so it must stay
-   visible everywhere now — see .sidebar.is-rail below. */
+   The only sidebar control: it shows and hides the sidebar on every screen. */
 .sidebar-toggle {
   display: inline-flex;
   align-items: center;
@@ -398,23 +397,8 @@ main { padding: 20px 24px; flex: 1; min-width: 0; overflow: hidden; height: 100%
 }
 .sidebar-toggle:hover { background: var(--hover); }
 
-/* Close button inside the drawer — desktop: hidden */
-.sidebar-close {
-  display: none;
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  border: none;
-  background: transparent;
-  font-size: 1rem;
-  color: var(--muted);
-  padding: 4px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.sidebar-close:hover { background: var(--hover); color: var(--text); }
 
-/* Backdrop overlay — hidden by default */
+/* Backdrop behind the drawer — hidden by default */
 .sidebar-backdrop {
   display: none;
   position: fixed;
@@ -422,114 +406,47 @@ main { padding: 20px 24px; flex: 1; min-width: 0; overflow: hidden; height: 100%
   background: var(--overlay);
   z-index: 150;
 }
-.sidebar-backdrop.visible { display: block; }
 
-/* ── Sidebar icon rail (round 2, 4e) — desktop only ──
-   .sidebar.is-rail collapses the expanded sidebar to a narrow strip.
-   Scoped to min-width:769px (the mobile breakpoint's complement) so it
-   never fights the off-canvas drawer rules below: on mobile the sidebar
-   is governed entirely by .sidebar.open/transform, and .is-rail (if the
-   class is ever present there too) has no effect — the rail is a
-   desktop-only concept per the contract ("always visible on desktop").
-   Widths transition so the calendar grid resizes smoothly instead of
-   snapping between states. */
-@media (min-width: 769px) {
-  .sidebar.is-rail {
-    width: 60px;
-    flex: 0 0 60px;
-    padding: 16px 6px;
-    align-items: center;
-  }
-
-  /* Text labels collapse to icons. Reuse the icon/label split that
-     already exists in the markup (.sync-icon+.sync-label,
-     "⚙"+.settings-label) rather than hiding whole controls, so the
-     buttons stay usable single-purpose icon buttons with their native
-     `title` attribute doing double duty as the tooltip. */
-  .sidebar.is-rail h2,
-  .sidebar.is-rail .jump-to,
-  .sidebar.is-rail #status,
-  .sidebar.is-rail #last-synced,
-  .sidebar.is-rail .sync-label,
-  .sidebar.is-rail .settings-label,
-  .sidebar.is-rail .provider-links,
-  .sidebar.is-rail .cal-name,
-  .sidebar.is-rail .cal-open-btn {
-    display: none;
-  }
-
-  /* Icon-only controls: square, centered, ≥32px hit target. */
-  .sidebar.is-rail #sidebar-toggle,
-  .sidebar.is-rail #sync-btn,
-  .sidebar.is-rail .settings-link,
-  .sidebar.is-rail #logout-btn {
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    gap: 0;
-    align-self: center;
-  }
-
-  /* "+ New event" has no separate icon/label markup to split, so its
-     text is hidden via font-size and a generated "+" glyph stands in —
-     same end result (icon-only, ≥32px target) without needing new
-     markup. */
-  .sidebar.is-rail .new-event-btn {
-    width: 36px;
-    height: 36px;
-    min-height: 36px;
-    padding: 0;
-    font-size: 0;
-    align-self: center;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .sidebar.is-rail .new-event-btn::before {
-    content: '+';
-    font-size: 1.2rem;
-    font-weight: 700;
-    line-height: 1;
-  }
-
-  /* Calendar list collapses to colour swatches that stay clickable
-     toggles. .cal-color (the per-calendar colour <input type="color">)
-     already renders as a coloured swatch — it's made the sole visible,
-     hit-testable surface of the row, while the actual .cal-toggle
-     checkbox (still the real show/hide control app.js listens on) is
-     stretched invisibly over the same area via CSS Grid so a click
-     anywhere on the swatch toggles it. No JS changes needed. */
-  .sidebar.is-rail .cal-item {
-    display: grid;
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr;
-    justify-items: center;
-    align-items: center;
-    padding: 6px 4px;
-    gap: 0;
-  }
-  .sidebar.is-rail .cal-toggle,
-  .sidebar.is-rail .cal-color {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  .sidebar.is-rail .cal-color {
-    width: 24px;
-    height: 24px;
-    pointer-events: none;
-  }
-  .sidebar.is-rail .cal-toggle {
-    width: 100%;
-    height: 100%;
-    min-height: 36px;
-    margin: 0;
-    opacity: 0;
-    cursor: pointer;
-  }
-  .sidebar.is-rail .cal-toggle:not(:checked) ~ .cal-color {
-    opacity: 0.35;
-  }
+/* ── Sidebar collapsed ──
+   app.js toggles body.sidebar-collapsed from the ☰ button. Collapsed, the
+   sidebar shrinks to a strip holding that button and nothing else. */
+body.sidebar-collapsed .sidebar {
+  width: 52px;
+  flex: 0 0 52px;
+  padding: 12px 8px;
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
 }
+body.sidebar-collapsed .sidebar > :not(.sidebar-header),
+body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
+  /* !important: the id-scoped .sidebar #sync-btn etc. rules above set display. */
+  display: none !important;
+}
+
+/* ── Sidebar as a drawer: 1280px and below ──
+   A docked sidebar costs the calendar too much width here, so the open
+   sidebar slides over the calendar instead of pushing it aside. app.js
+   starts it collapsed at these widths. main keeps room on the left for the
+   collapsed ☰ strip. */
+@media (max-width: 1280px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 280px;
+    max-width: 85vw;
+    flex: none;
+    padding: 12px 20px 20px;
+    background: var(--card);
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.18);
+    z-index: 200;
+  }
+  body:not(.sidebar-collapsed) .sidebar-backdrop { display: block; }
+  main { padding: 12px 12px 12px 56px; }
+}
+
 
 /* ── Mobile layout ── */
 @media (max-width: 768px) {
@@ -549,129 +466,11 @@ main { padding: 20px 24px; flex: 1; min-width: 0; overflow: hidden; height: 100%
   .sync-label { display: none; }
   .settings-label { display: none; }
   .settings-link { padding: 6px 10px; }
+}
 
-  /* Sidebar: an always-visible narrow rail by default; .sidebar.open
-     expands it to the full off-canvas drawer. The sidebar must never be
-     fully hidden — #sidebar-toggle lives inside it (moved there when
-     .topbar was removed), so if the default state translated it fully
-     off-screen there would be nothing left on screen able to reopen it.
-     Only the resting/closed state changed here: .sidebar.open reproduces
-     the exact 280px drawer (same width, padding, shadow, backdrop) this
-     file had before this fix — that mechanism is unchanged. */
-  .sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    height: 100%;
-    width: 64px;
-    max-width: 64px;
-    background: var(--card);
-    z-index: 200;
-    transition: width 0.25s ease, max-width 0.25s ease, padding 0.25s ease;
-    padding: 14px 4px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.12);
-    flex: none;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-  }
-  .sidebar.open {
-    width: 280px;
-    max-width: 85vw;
-    padding: 52px 20px 20px;
-    align-items: stretch;
-    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.18);
-  }
-  .sidebar-close { display: none; }
-  .sidebar.open .sidebar-close { display: block; }
 
-  /* Rail content collapse — default (closed) state only; .sidebar.open
-     shows the regular full-labelled drawer content untouched. Same
-     icon-collapse techniques as the desktop .sidebar.is-rail block
-     above (hidden labels, the .cal-toggle/.cal-color swatch-overlay
-     trick for a clickable colour-swatch toggle, the .new-event-btn
-     font-size:0 + generated "+" trick) — re-declared here rather than
-     sharing the rule text with that block because touch targets need to
-     be >=40px here (vs 36px for desktop's mouse target) and this
-     sidebar is a fixed overlay rather than an in-flow flex item, so the
-     two rail states aren't styled by the same selectors. */
-  .sidebar:not(.open) h2,
-  .sidebar:not(.open) .provider-links,
-  .sidebar:not(.open) .cal-name,
-  .sidebar:not(.open) .cal-open-btn {
-    display: none;
-  }
-  .sidebar:not(.open) #sidebar-toggle,
-  .sidebar:not(.open) #sync-btn,
-  .sidebar:not(.open) .settings-link,
-  .sidebar:not(.open) #logout-btn {
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    gap: 0;
-    align-self: center;
-    flex: none;
-  }
-  .sidebar:not(.open) .new-event-btn {
-    width: 44px;
-    height: 44px;
-    min-height: 44px;
-    padding: 0;
-    font-size: 0;
-    align-self: center;
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .sidebar:not(.open) .new-event-btn::before {
-    content: '+';
-    font-size: 1.3rem;
-    font-weight: 700;
-    line-height: 1;
-  }
-  .sidebar:not(.open) .cal-item {
-    display: grid;
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr;
-    justify-items: center;
-    align-items: center;
-    padding: 4px;
-    gap: 0;
-  }
-  .sidebar:not(.open) .cal-toggle,
-  .sidebar:not(.open) .cal-color {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  .sidebar:not(.open) .cal-color {
-    width: 26px;
-    height: 26px;
-    pointer-events: none;
-  }
-  .sidebar:not(.open) .cal-toggle {
-    width: 100%;
-    height: 100%;
-    min-width: 44px;
-    min-height: 44px;
-    margin: 0;
-    opacity: 0;
-    cursor: pointer;
-  }
-  .sidebar:not(.open) .cal-toggle:not(:checked) ~ .cal-color {
-    opacity: 0.35;
-  }
-
-  /* Layout & main fill remaining width. The 64px rail is fixed/overlay
-     (out of normal flow), so main needs its own left clearance or the
-     calendar grid would start underneath it. The open drawer overlays
-     on top of this (dimmed by #sidebar-backdrop) rather than pushing
-     content over, so main's padding doesn't need to change when open. */
-  .layout { overflow: hidden; }
-  main { padding: 8px 8px 0 76px; }
+@media (max-width: 768px) {
+  main { padding: 8px 8px 0 56px; }
   #calendar { padding: 8px; border-radius: 8px; }
 
   /* FullCalendar mobile tweaks */
@@ -693,6 +492,18 @@ main { padding: 20px 24px; flex: 1; min-width: 0; overflow: hidden; height: 100%
   border-radius: 12px;
   padding: 16px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* ── Sidebar header: hamburger, app name, hide button ── */
+.sidebar-header { display: flex; align-items: center; gap: 6px; }
+.sidebar-brand {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .legend {
@@ -1316,7 +1127,6 @@ body[data-density='emphasised'] .is-compact .fc-daygrid-event.evt-important {
    CONTRACT2.md §3:
      <body data-weekends="off|tint|muted|divider">
      .fc-day-sat / .fc-day-sun (FullCalendar's own, verified in the bundle)
-     .is-rail (on .sidebar — see the sidebar section above)
      data-imp="N" (on .fc-daygrid-day, integer >= 1, absent when zero)
    ══════════════════════════════════════════════════════════════════════ */
 
@@ -1484,44 +1294,4 @@ body[data-weekends='divider'] .fc-day-today.fc-day-sat {
   .is-compact .fc-daygrid-day-events[data-imp='1']::after {
     content: '★';
   }
-}
-
-/* ── Sidebar: fully collapsed ──────────────────────────────────────────────
-   Replaces the earlier icon rail. When collapsed the sidebar is removed from
-   the layout entirely and the calendar takes the full width; a single small
-   arrow pinned to the left edge is the only thing left to bring it back.
-   app.js calls calendar.updateSize() after toggling so the grid re-measures
-   instead of keeping its old width. */
-.sidebar-restore {
-  display: none;
-  position: fixed;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 60;
-  width: 22px;
-  height: 60px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-left: none;
-  border-radius: 0 6px 6px 0;
-  background: var(--card);
-  color: var(--text);
-  font-size: 0.9rem;
-  line-height: 1;
-  cursor: pointer;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.18);
-}
-.sidebar-restore:hover { background: var(--hover); }
-
-body.sidebar-collapsed .sidebar { display: none; }
-body.sidebar-collapsed .sidebar-restore { display: flex; }
-
-@media (max-width: 768px) {
-  /* The mobile rail is also removed when collapsed, so drop the gutter that
-     was reserved for it. */
-  body.sidebar-collapsed main { padding-left: 0; }
-  .sidebar-restore { height: 72px; width: 26px; }
 }

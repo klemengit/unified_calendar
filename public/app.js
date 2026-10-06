@@ -112,7 +112,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupModals();
   setupJumpTo();
   setupSidebar();
-  setupSidebarCollapse();
   setupBackgroundSync(settings.syncInterval ?? 15);
   updateLastSyncedDisplay();
   setInterval(updateLastSyncedDisplay, 60000);
@@ -331,66 +330,51 @@ function timeFmt() {
   return { hour: hour12 ? 'numeric' : '2-digit', minute: '2-digit', hour12 };
 }
 
-// ── Sidebar drawer (mobile) ──
-
-function setupSidebar() {
-  const toggle = document.getElementById('sidebar-toggle');
-  const close = document.getElementById('sidebar-close');
-  const backdrop = document.getElementById('sidebar-backdrop');
-  if (!toggle) return;
-  toggle.addEventListener('click', () => {
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar.classList.contains('open')) closeSidebar(); else openSidebar();
-  });
-  close?.addEventListener('click', closeSidebar);
-  backdrop?.addEventListener('click', closeSidebar);
-}
-
-function openSidebar() {
-  document.getElementById('sidebar').classList.add('open');
-  document.getElementById('sidebar-backdrop').classList.add('visible');
-}
-
-function closeSidebar() {
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('sidebar-backdrop').classList.remove('visible');
-}
-
-// ── Sidebar rail (expanded / icon-only) ──
+// ── Sidebar ──
 //
-// Independent of the mobile open/close drawer above: this fully hides the
-// sidebar, leaving only a small floating arrow to bring it back. Persisted so
-// it survives reloads, and restored on init.
+// One ☰ button toggles body.sidebar-collapsed, which shrinks the sidebar to
+// that button alone. Wide screens dock the open sidebar beside the calendar
+// and remember the choice. At SIDEBAR_DRAWER_QUERY widths it opens as a drawer
+// over the calendar instead, and always starts closed.
 
-function applySidebarCollapsed(collapsed) {
+const SIDEBAR_DRAWER_QUERY = '(max-width: 1280px)';
+
+function isDrawerWidth() {
+  return window.matchMedia?.(SIDEBAR_DRAWER_QUERY).matches ?? false;
+}
+
+function storedSidebarCollapsed() {
+  try { return localStorage.getItem(SIDEBAR_STATE_KEY) === 'collapsed'; } catch { return false; }
+}
+
+function applySidebarCollapsed(collapsed, { persist = true } = {}) {
   document.body.classList.toggle('sidebar-collapsed', collapsed);
 
-  const btn = document.getElementById('sidebar-rail-toggle');
+  const btn = document.getElementById('sidebar-toggle');
   if (btn) {
-    btn.setAttribute('aria-label', 'Hide sidebar');
-    btn.title = 'Hide sidebar';
-    btn.setAttribute('aria-pressed', String(collapsed));
+    btn.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+    btn.setAttribute('aria-expanded', String(!collapsed));
   }
-  const restore = document.getElementById('sidebar-restore');
-  if (restore) restore.setAttribute('aria-expanded', String(!collapsed));
 
-  try { localStorage.setItem(SIDEBAR_STATE_KEY, collapsed ? 'collapsed' : 'expanded'); } catch { /* private mode, quota, etc. */ }
+  if (persist && !isDrawerWidth()) {
+    try { localStorage.setItem(SIDEBAR_STATE_KEY, collapsed ? 'collapsed' : 'expanded'); } catch { /* private mode, quota, etc. */ }
+  }
 
-  // The grid keeps its old pixel width until FullCalendar re-measures, which is
-  // what made the previous rail overflow the viewport. Re-measure after the
-  // layout has settled.
-  requestAnimationFrame(() => calendar?.updateSize());
 }
 
-function setupSidebarCollapse() {
-  let stored;
-  try { stored = localStorage.getItem(SIDEBAR_STATE_KEY); } catch { /* private mode */ }
-  applySidebarCollapsed(stored === 'collapsed');
+function setupSidebar() {
+  applySidebarCollapsed(isDrawerWidth() || storedSidebarCollapsed(), { persist: false });
 
-  document.getElementById('sidebar-rail-toggle')
-    ?.addEventListener('click', () => applySidebarCollapsed(true));
-  document.getElementById('sidebar-restore')
-    ?.addEventListener('click', () => applySidebarCollapsed(false));
+  document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
+    applySidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+  });
+  document.getElementById('sidebar-backdrop')?.addEventListener('click', () => applySidebarCollapsed(true));
+
+  // Crossing into drawer widths closes the sidebar; crossing back restores the
+  // docked state the user last chose.
+  window.matchMedia?.(SIDEBAR_DRAWER_QUERY).addEventListener?.('change', (e) => {
+    applySidebarCollapsed(e.matches || storedSidebarCollapsed(), { persist: false });
+  });
 }
 
 // ── Body / theme attributes ──
@@ -613,6 +597,14 @@ function initCalendar() {
     },
   });
   calendar.render();
+
+  // FullCalendar only re-measures on window resize. The sidebar sliding open or
+  // shut resizes it without one.
+  let resizeFrame = 0;
+  new ResizeObserver(() => {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = requestAnimationFrame(() => calendar.updateSize());
+  }).observe(document.getElementById('calendar'));
 
   document.getElementById('open-google').addEventListener('click', () => {
     window.open(providerUrl('google'), '_blank', 'noopener');
