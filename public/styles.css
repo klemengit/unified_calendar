@@ -73,7 +73,7 @@
   --fc-list-event-hover-bg-color: var(--hover);
   --fc-list-event-dot-width: 10px;
   --fc-non-business-color: rgba(0, 0, 0, 0.03);
-  --fc-now-indicator-color: var(--ms);
+  --fc-now-indicator-color: #ea4335;
   --fc-highlight-color: rgba(37, 99, 235, 0.15);
   --fc-small-font-size: 0.85em;
 }
@@ -523,6 +523,26 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 }
 #calendar .fc-timegrid-slot-label[data-time='00:00:00'] .fc-timegrid-slot-label-cushion {
   visibility: hidden;
+}
+
+/* ── Current time: a red line across today's column with a dot at its left
+   end, as in Google Calendar. FullCalendar draws the line in today's column
+   only, and clips anything outside it, so the dot sits just inside the column
+   edge. The arrow in the hour column is dropped in favour of the dot. */
+.fc .fc-timegrid-now-indicator-arrow { display: none; }
+.fc .fc-timegrid-now-indicator-line {
+  border-width: 2px 0 0;
+  z-index: 5;
+}
+.fc .fc-timegrid-now-indicator-line::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: -7px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fc-now-indicator-color);
 }
 
 /* ── View dropdown (replaces the view buttons at 1280px and below) ── */
