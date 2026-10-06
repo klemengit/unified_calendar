@@ -153,8 +153,16 @@ if (config.authPassword) {
 </body>
 </html>`;
 
+  // The manifest and icons stay public: Chrome fetches the manifest without
+  // cookies, so behind the login it would get the login page and install the
+  // app as a plain bookmark. They hold nothing private.
+  const PUBLIC_PATHS = new Set([
+    '/login', '/manifest.json', '/icon.svg', '/icon-192.png', '/icon-512.png',
+    '/icon-maskable-512.png', '/apple-touch-icon.png',
+  ]);
+
   app.use((req, res, next) => {
-    if (req.path === '/login') return next();
+    if (PUBLIC_PATHS.has(req.path)) return next();
     if (isAuthorized(req)) return next();
     if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
     res.redirect('/login');
