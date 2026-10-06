@@ -68,7 +68,7 @@ The app is fully usable on a smartphone:
 
 The app is also installable as a **Progressive Web App (PWA)**:
 
-- On Android (Chrome): tap the browser menu → *Add to Home Screen*.
+- On Android (Chrome): tap the browser menu → *Install app* (or *Add to Home Screen*).
 - On iOS (Safari): tap Share → *Add to Home Screen*.
 
 Once installed, the app shell (HTML, CSS, JS, and FullCalendar) is cached by
