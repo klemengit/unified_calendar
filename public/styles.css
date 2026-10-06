@@ -489,11 +489,11 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   main #calendar { padding: 4px 2px 0; border-radius: 0; box-shadow: none; }
 
   /* FullCalendar mobile tweaks: one toolbar row, the title shrinking to fit. */
-  .fc .fc-toolbar.fc-header-toolbar { gap: 4px; flex-wrap: nowrap; margin-bottom: 4px; }
+  .fc .fc-toolbar.fc-header-toolbar { gap: 4px; flex-wrap: nowrap; margin: 2px 0 6px; }
   .fc .fc-toolbar-chunk { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
   .fc .fc-toolbar-chunk:nth-child(2) { flex: 1 1 auto; min-width: 0; text-align: center; }
-  .fc .fc-button { padding: 4px 7px !important; font-size: 0.78rem !important; }
-  .fc .fc-button-group > .fc-button { padding: 4px 6px !important; }
+  .fc .fc-button { padding: 8px 7px !important; font-size: 0.78rem !important; line-height: 1.2; }
+  .fc .fc-button-group > .fc-button { padding: 8px 6px !important; }
   .fc .fc-toolbar-title {
     font-size: 0.82rem !important;
     white-space: nowrap;
