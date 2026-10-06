@@ -755,6 +755,8 @@ function initCalendar() {
       fitWorkHours();
     }));
 
+  setupSwipe(document.getElementById('calendar'));
+
   // FullCalendar only re-measures on window resize. The sidebar sliding open or
   // shut, and all-day events growing the header, resize it without one.
   let resizeFrame = 0;
@@ -781,6 +783,36 @@ function initCalendar() {
 }
 
 // ── Jump to year / month ──
+
+// ── Swipe to the previous or next period ──
+//
+// A quick sideways swipe on the calendar does what the ‹ › buttons do. It must
+// be mostly horizontal, so scrolling the day grid never triggers it, and short,
+// so FullCalendar's long-press (1 s) to drag an event or select a time is left
+// alone.
+
+const SWIPE_MIN_PX = 60;
+const SWIPE_MAX_MS = 600;
+
+function setupSwipe(el) {
+  let start = null;
+  el.addEventListener('touchstart', (ev) => {
+    const t = ev.touches[0];
+    start = ev.touches.length === 1 ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
+  }, { passive: true });
+  el.addEventListener('touchend', (ev) => {
+    if (!start) return;
+    const t = ev.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    const quick = Date.now() - start.time <= SWIPE_MAX_MS;
+    start = null;
+    if (!quick || Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < 2 * Math.abs(dy)) return;
+    closeViewMenu();
+    if (dx < 0) calendar.next(); else calendar.prev();
+  }, { passive: true });
+  el.addEventListener('touchcancel', () => { start = null; }, { passive: true });
+}
 
 function setupJumpTo() {
   const monthSel = document.getElementById('jump-month');
