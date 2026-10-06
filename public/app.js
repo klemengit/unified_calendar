@@ -522,6 +522,11 @@ function visibleStartHour() {
   return Math.min(LATEST_START_HOUR, new Date().getHours());
 }
 
+// Where the grid scrolls to: a quarter hour above the first visible hour, so
+// that hour's label, which sits centred on its line, is not cut in half.
+function visibleScrollTime() {
+  return { minutes: Math.max(0, visibleStartHour() * 60 - 15) };
+}
 let slotMinTimeSpelling = '00:00:00';
 
 function fitWorkHours() {
@@ -541,7 +546,7 @@ function fitWorkHours() {
   // same time, spelled differently, does.
   slotMinTimeSpelling = slotMinTimeSpelling === '00:00:00' ? '00:00' : '00:00:00';
   calendar.setOption('slotMinTime', slotMinTimeSpelling);
-  calendar.scrollToTime({ hours: visibleStartHour() });
+  calendar.scrollToTime(visibleScrollTime());
 }
 
 // Strictly-before-today (local midnight) test shared by dayCellClassNames.
@@ -667,7 +672,7 @@ function initCalendar() {
     },
     allDayText: '',
     height: '100%',
-    scrollTime: { hours: visibleStartHour() },
+    scrollTime: visibleScrollTime(),
     windowResize: () => fitWorkHours(),
     nowIndicator: true,
     dayMaxEvents: true,

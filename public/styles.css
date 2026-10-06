@@ -512,6 +512,19 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 #calendar .fc-timegrid-slot { height: var(--slot-height, 1.5em); }
 #calendar .fc-timegrid-slot-label-cushion { line-height: 1; }
 
+/* Hour labels sit on the hour's grid line, as in Google Calendar, rather than
+   in the middle of the slot below it. 00:00 would sit on the grid's top edge
+   and be cut in half, so it is hidden. */
+#calendar .fc-timegrid-slot-label { vertical-align: top; }
+#calendar .fc-timegrid-slot-label-cushion {
+  position: relative;
+  transform: translateY(-50%);
+  background: var(--fc-page-bg-color);
+}
+#calendar .fc-timegrid-slot-label[data-time='00:00:00'] .fc-timegrid-slot-label-cushion {
+  visibility: hidden;
+}
+
 /* ── View dropdown (replaces the view buttons at 1280px and below) ── */
 .view-menu {
   position: fixed;
