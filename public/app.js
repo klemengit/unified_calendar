@@ -506,6 +506,30 @@ function toggleViewMenu(button) {
   document.addEventListener('pointerdown', onViewMenuOutside, true);
 }
 
+// ── Week number beside the toolbar title ──
+//
+// Shown as "W41", or "W40–44" for a month, using FullCalendar's own week
+// numbering (the same as the grid's "W 41"). Left off views spanning more than
+// six weeks, where a week range says little. CSS renders it from data-week.
+
+const MAX_TITLE_WEEKS = 6;
+
+function updateTitleWeek(view) {
+  const title = document.querySelector('#calendar .fc-toolbar-title');
+  if (!title) return;
+
+  const lastDay = new Date(view.currentEnd.getTime() - 86400000);
+  const spanWeeks = (view.currentEnd - view.currentStart) / (7 * 86400000);
+  if (spanWeeks > MAX_TITLE_WEEKS) {
+    delete title.dataset.week;
+    return;
+  }
+
+  const first = calendar.formatDate(view.currentStart, { week: 'numeric' });
+  const last = calendar.formatDate(lastDay, { week: 'numeric' });
+  title.dataset.week = first === last ? `W${first}` : `W${first}–${last}`;
+}
+
 // ── Working hours fill the time grid ──
 //
 // In the Day and Week views the rows are sized so VISIBLE_HOURS exactly fill
@@ -704,6 +728,7 @@ function initCalendar() {
       syncJumpToSelectors();
       updateCompactClass(arg.view.type);
       updateViewMenuLabel(arg.view.type);
+      updateTitleWeek(arg.view);
       requestAnimationFrame(fitWorkHours);
       try { localStorage.setItem(LAST_VIEW_KEY, arg.view.type); } catch { /* private mode, quota, etc. */ }
       updateImportantDayCounts();

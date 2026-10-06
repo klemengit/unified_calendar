@@ -545,6 +545,13 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   background: var(--fc-now-indicator-color);
 }
 
+/* Week number after the toolbar title; app.js sets data-week. */
+.fc .fc-toolbar-title[data-week]::after {
+  content: ' · ' attr(data-week);
+  color: var(--muted);
+  font-weight: 400;
+}
+
 /* ── View dropdown (replaces the view buttons at 1280px and below) ── */
 .view-menu {
   position: fixed;
