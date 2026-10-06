@@ -435,6 +435,77 @@ function buildToolbarRight(enabledViews) {
   return (ordered.length ? ordered : VIEW_ORDER).join(',');
 }
 
+// ── Header toolbar: view buttons or one dropdown ──
+//
+// On smaller screens the row of view buttons wraps the toolbar onto two
+// lines, so below VIEW_MENU_QUERY it becomes a single "Week ▾" button that
+// opens a menu of the same views.
+
+const VIEW_MENU_QUERY = '(max-width: 1280px)';
+
+const VIEW_LABELS = {
+  timeGridDay: 'Day',
+  timeGridWeek: 'Week',
+  dayGridMonth: 'Month',
+  multiMonth2: '2 mo',
+  multiMonth4: '4 mo',
+  multiMonthYear: 'Year',
+  listMonth: 'Agenda',
+};
+
+function isViewMenuWidth() {
+  return window.matchMedia?.(VIEW_MENU_QUERY).matches ?? false;
+}
+
+function headerToolbarFor(useMenu) {
+  return {
+    left: 'prev,next today',
+    center: 'title',
+    right: useMenu ? 'viewMenu' : buildToolbarRight(settings.enabledViews),
+  };
+}
+
+function updateViewMenuLabel(viewType) {
+  const btn = document.querySelector('#calendar .fc-viewMenu-button');
+  if (btn) btn.textContent = `${VIEW_LABELS[viewType] ?? 'View'} ▾`;
+}
+
+function closeViewMenu() {
+  document.getElementById('view-menu')?.remove();
+  document.removeEventListener('pointerdown', onViewMenuOutside, true);
+}
+
+function onViewMenuOutside(ev) {
+  if (!ev.target.closest('#view-menu, .fc-viewMenu-button')) closeViewMenu();
+}
+
+function toggleViewMenu(button) {
+  if (document.getElementById('view-menu')) { closeViewMenu(); return; }
+
+  const menu = document.createElement('div');
+  menu.id = 'view-menu';
+  menu.className = 'view-menu';
+  menu.setAttribute('role', 'menu');
+  for (const id of buildToolbarRight(settings.enabledViews).split(',')) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.setAttribute('role', 'menuitem');
+    item.textContent = VIEW_LABELS[id] ?? id;
+    item.classList.toggle('active', id === calendar.view.type);
+    item.addEventListener('click', () => {
+      closeViewMenu();
+      calendar.changeView(id);
+    });
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+
+  const r = button.getBoundingClientRect();
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.left = `${Math.max(8, r.right - menu.offsetWidth)}px`;
+  document.addEventListener('pointerdown', onViewMenuOutside, true);
+}
+
 // Strictly-before-today (local midnight) test shared by dayCellClassNames.
 function isSpentDate(date) {
   const today = new Date();
@@ -552,10 +623,9 @@ function initCalendar() {
       multiMonthYear: { buttonText: 'Year' },
       listMonth: { buttonText: 'Agenda' },
     },
-    headerToolbar: {
-      left: 'prev,next today',
-      center: 'title',
-      right: buildToolbarRight(settings.enabledViews),
+    headerToolbar: headerToolbarFor(isViewMenuWidth()),
+    customButtons: {
+      viewMenu: { text: 'View', hint: 'Change view', click: (ev) => toggleViewMenu(ev.currentTarget) },
     },
     allDayText: '',
     height: '100%',
@@ -589,6 +659,7 @@ function initCalendar() {
     datesSet: (arg) => {
       syncJumpToSelectors();
       updateCompactClass(arg.view.type);
+      updateViewMenuLabel(arg.view.type);
       try { localStorage.setItem(LAST_VIEW_KEY, arg.view.type); } catch { /* private mode, quota, etc. */ }
       updateImportantDayCounts();
     },
@@ -598,6 +669,12 @@ function initCalendar() {
   });
   calendar.render();
 
+  // The compact layout in styles.css changes font sizes without resizing the
+  // calendar, so FullCalendar would keep its old measurements and draw events
+  // off their time slots. Keep this query in step with the @media block there.
+  window.matchMedia?.('(min-width: 769px) and (max-width: 1280px), (min-width: 769px) and (max-height: 800px)')
+    .addEventListener?.('change', () => requestAnimationFrame(() => calendar.updateSize()));
+
   // FullCalendar only re-measures on window resize. The sidebar sliding open or
   // shut resizes it without one.
   let resizeFrame = 0;
@@ -605,6 +682,12 @@ function initCalendar() {
     cancelAnimationFrame(resizeFrame);
     resizeFrame = requestAnimationFrame(() => calendar.updateSize());
   }).observe(document.getElementById('calendar'));
+
+  window.matchMedia?.(VIEW_MENU_QUERY).addEventListener?.('change', (e) => {
+    closeViewMenu();
+    calendar.setOption('headerToolbar', headerToolbarFor(e.matches));
+    updateViewMenuLabel(calendar.view.type);
+  });
 
   document.getElementById('open-google').addEventListener('click', () => {
     window.open(providerUrl('google'), '_blank', 'noopener');
