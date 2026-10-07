@@ -778,6 +778,27 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   .settings .account-row button { padding: 8px 12px; }
 }
 
+/* ── Nearby events chips (event details modal, app.js renderNearby) ── */
+.modal-nearby { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 12px; }
+.modal-nearby-label { width: 100%; font-size: 0.75rem; color: var(--muted); }
+.nearby-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.nearby-chip:hover { background: var(--hover); }
+.nearby-chip time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.nearby-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.nearby-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ── Event details modal ── */
 .modal-overlay {
   position: fixed;

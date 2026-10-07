@@ -1878,6 +1878,7 @@ function openModal(event) {
   document.getElementById('modal-time').textContent =
     formatEventTime(event) + (p.recurring ? ' · ↻ repeats' : '');
 
+  renderNearby(event);
   renderLocation(document.getElementById('modal-location'), p.location);
   renderGuests(document.getElementById('modal-guests'), p.attendees);
   renderDescription(document.getElementById('modal-description'), p.description);
@@ -1897,6 +1898,70 @@ function openModal(event) {
   updateImportantButton();
 
   document.getElementById('event-modal').classList.remove('hidden');
+}
+
+// ── Nearby events in the detail modal ──
+//
+// Overlapping or back-to-back events are thin targets, on a phone especially,
+// so a tap often opens a neighbour of the one meant. The modal lists the
+// events that overlap the open one, or sit within NEARBY_GAP_MS of it, as
+// chips; tapping one shows that event instead.
+
+const NEARBY_GAP_MS = 30 * 60 * 1000;
+const NEARBY_MAX = 8;
+const DAY_MS = 86400000;
+
+function nearbyEvents(event) {
+  if (!event.start) return [];
+  const span = (e) => {
+    const start = e.start.getTime();
+    const end = e.end ? e.end.getTime() : start + (e.allDay ? DAY_MS : 0);
+    return [start, end];
+  };
+  const [start, end] = span(event);
+  const gap = event.allDay ? 0 : NEARBY_GAP_MS;
+  const seen = new Set([event.id]);
+  const found = [];
+  for (const other of [...(calendar?.getEvents() ?? []), ...(dayCal?.getEvents() ?? [])]) {
+    if (seen.has(other.id) || !other.start || other.display === 'none') continue;
+    seen.add(other.id);
+    if (other.allDay !== Boolean(event.allDay)) continue;
+    const [oStart, oEnd] = span(other);
+    if (oStart < end + gap && oEnd > start - gap) found.push(other);
+  }
+  return found.sort((a, b) => a.start - b.start).slice(0, NEARBY_MAX);
+}
+
+function renderNearby(event) {
+  const box = document.getElementById('modal-nearby');
+  const list = nearbyEvents(event);
+  box.replaceChildren();
+  box.classList.toggle('hidden', list.length === 0);
+  if (!list.length) return;
+  const label = document.createElement('span');
+  label.className = 'modal-nearby-label';
+  label.textContent = list.length === 1 ? 'Also here' : `Also here (${list.length})`;
+  box.appendChild(label);
+  for (const other of list) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'nearby-chip';
+    const dot = document.createElement('span');
+    dot.className = 'nearby-dot';
+    dot.style.background = other.backgroundColor || other.extendedProps?.color || '#666';
+    chip.appendChild(dot);
+    if (!other.allDay) {
+      const time = document.createElement('time');
+      time.textContent = other.start.toLocaleTimeString([], timeFmt());
+      chip.appendChild(time);
+    }
+    const title = document.createElement('span');
+    title.className = 'nearby-title';
+    title.textContent = other.title || '(no title)';
+    chip.appendChild(title);
+    chip.addEventListener('click', () => openModal(other));
+    box.appendChild(chip);
+  }
 }
 
 // ── Manual important flag ──
