@@ -17,6 +17,14 @@
         ? stored
         : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       document.documentElement.dataset.theme = resolved;
+
+      // Colour Android's status and navigation bars to match the page: the
+      // theme-color tag follows data-theme, however and whenever it changes.
+      var bars = { light: '#ffffff', dark: '#1e2128' };
+      var meta = document.querySelector('meta[name="theme-color"]');
+      function paintBars() { meta.content = bars[document.documentElement.dataset.theme] || bars.light; }
+      paintBars();
+      new MutationObserver(paintBars).observe(document.documentElement, { attributeFilter: ['data-theme'] });
     })();
   </script>
   <link rel="stylesheet" href="/styles.css" />

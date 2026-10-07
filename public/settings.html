@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Settings · Unified Calendar</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
+  <meta name="theme-color" content="#ffffff">
   <script>
     // Resolve and apply the theme before first paint, to avoid a flash of the
     // wrong theme. Reconciled against the server value once settings load.
@@ -14,6 +15,14 @@
         ? stored
         : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       document.documentElement.dataset.theme = resolved;
+
+      // Colour Android's status and navigation bars to match the page: the
+      // theme-color tag follows data-theme, however and whenever it changes.
+      var bars = { light: '#ffffff', dark: '#1e2128' };
+      var meta = document.querySelector('meta[name="theme-color"]');
+      function paintBars() { meta.content = bars[document.documentElement.dataset.theme] || bars.light; }
+      paintBars();
+      new MutationObserver(paintBars).observe(document.documentElement, { attributeFilter: ['data-theme'] });
     })();
   </script>
   <link rel="stylesheet" href="/styles.css" />
