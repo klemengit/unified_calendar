@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LEAD_MINUTES, isTimeZone } from './reminders.js';
 
 // Simple file-backed store for ICS subscription links so they survive restarts.
 // This module persists feeds, settings (including the starred-event id list) and OAuth tokens —
@@ -54,6 +55,13 @@ const DEFAULT_SETTINGS = {
   compactDensity: 'emphasised', // 'emphasised' | 'dots' | 'titles'
   importantEvents: [], // string[] of FullCalendar event ids
   weekends: 'tint', // 'off' | 'tint' | 'muted' | 'divider'
+  // Push reminders, sent to every device that turned notifications on.
+  reminders: {
+    minutesBefore: 10, // one of LEAD_MINUTES
+    allDayHour: 8, // hour of the day all-day events are announced; null = never
+    mutedCalendars: [], // calendar ids that send no reminders
+    timeZone: null, // IANA zone the reminders are timed in, reported by the browser
+  },
 };
 let settings = clone(DEFAULT_SETTINGS);
 let nextCaldavId = 1;
@@ -78,7 +86,7 @@ function normalizeImportantEvents(list) {
 // Crash-safe private write: a temp file created 0600 from the outset (so it is never briefly
 // world-readable), then renamed over the target. The rename carries the 0600 with it, which is
 // how an existing looser file gets tightened.
-function writePrivate(target, name, data) {
+export function writePrivate(target, name, data) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tmp = path.join(DATA_DIR, `.${name}.${process.pid}.${Date.now()}.tmp`);
   try {
@@ -197,12 +205,27 @@ export function loadSettings() {
     settings.weekends = ['off', 'tint', 'muted', 'divider'].includes(saved.weekends)
       ? saved.weekends
       : DEFAULT_SETTINGS.weekends;
+    settings.reminders = normalizeReminders(saved.reminders, DEFAULT_SETTINGS.reminders);
     nextCaldavId =
       settings.caldavAccounts.reduce((max, a) => Math.max(max, parseInt(String(a.id).slice(5), 10) || 0), 0) + 1;
   } catch {
     settings = clone(DEFAULT_SETTINGS);
   }
   return settings;
+}
+
+// Takes each valid field of `input`, and the rest from `base`.
+function normalizeReminders(input, base) {
+  const r = input && typeof input === 'object' ? input : {};
+  const hourOk = r.allDayHour === null || (Number.isInteger(r.allDayHour) && r.allDayHour >= 0 && r.allDayHour <= 23);
+  return {
+    minutesBefore: LEAD_MINUTES.includes(r.minutesBefore) ? r.minutesBefore : base.minutesBefore,
+    allDayHour: hourOk ? r.allDayHour : base.allDayHour,
+    mutedCalendars: Array.isArray(r.mutedCalendars)
+      ? [...new Set(r.mutedCalendars.filter((id) => typeof id === 'string' && id.length <= 200))].slice(0, 500)
+      : clone(base.mutedCalendars),
+    timeZone: isTimeZone(r.timeZone) ? r.timeZone : base.timeZone,
+  };
 }
 
 export function getSettings() {
@@ -231,6 +254,9 @@ export function updateSettings(patch = {}) {
     next.importantEvents = normalizeImportantEvents(patch.importantEvents);
   }
   if (['off', 'tint', 'muted', 'divider'].includes(patch.weekends)) next.weekends = patch.weekends;
+  if (patch.reminders && typeof patch.reminders === 'object') {
+    next.reminders = normalizeReminders(patch.reminders, settings.reminders);
+  }
   settings = next;
   persistSettings();
   return settings;

@@ -65,6 +65,18 @@ import {
   widgetCacheEnabled,
 } from './src/widget-cache-store.js';
 import { listCalendars } from './src/calendar-list.js';
+import { createReminderLoop, isTimeZone as isReminderTimeZone } from './src/reminders.js';
+import {
+  publicKey as pushPublicKey,
+  hasSubscribers,
+  subscriptionCount,
+  isSubscription,
+  addSubscription,
+  removeSubscription,
+  loadSent,
+  saveSent,
+  sendPush,
+} from './src/push-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -272,7 +284,70 @@ app.get('/api/settings', (req, res) => {
 });
 
 app.put('/api/settings', (req, res) => {
-  res.json(updateSettings(req.body || {}));
+  const result = updateSettings(req.body || {});
+  if (req.body?.reminders) reminderLoop.invalidate();
+  res.json(result);
+});
+
+// ── Reminders (web push) ──
+// The push service needs a contact for the sender: the app's own address when it has a public one.
+const PUSH_SUBJECT = config.baseUrl.startsWith('https://') ? config.baseUrl : 'mailto:unified-calendar@example.org';
+
+// The same token-on-disk fetch the widget uses, since the loop runs with no browser session.
+async function reminderEvents(timeMin, timeMax) {
+  const tokens = { ...getTokens() };
+  const before = JSON.stringify(tokens);
+  const { events } = await getUnifiedEvents(
+    { tokens }, timeMin, timeMax, getFeeds(), getSettings().providers, getGoogleCalendars(), getCaldavAccounts()
+  );
+  if (JSON.stringify(tokens) !== before) saveTokens(tokens);
+  return events;
+}
+
+const reminderLoop = createReminderLoop({
+  fetchEvents: reminderEvents,
+  getConfig: () => {
+    const { reminders, timeFormat } = getSettings();
+    const timeZone = isReminderTimeZone(reminders.timeZone)
+      ? reminders.timeZone
+      : Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return { ...reminders, timeZone, timeFormat };
+  },
+  hasSubscribers,
+  send: (payload) => sendPush(payload, { subject: PUSH_SUBJECT }),
+  loadSent,
+  saveSent,
+});
+reminderLoop.start();
+
+app.get('/api/push', (req, res) => {
+  res.json({ publicKey: pushPublicKey(), devices: subscriptionCount() });
+});
+
+app.post('/api/push/subscribe', (req, res) => {
+  const { subscription, label } = req.body || {};
+  if (!isSubscription(subscription)) return res.status(400).json({ error: 'Invalid subscription' });
+  addSubscription(subscription, typeof label === 'string' ? label : '');
+  reminderLoop.invalidate();
+  res.json({ ok: true, devices: subscriptionCount() });
+});
+
+app.post('/api/push/unsubscribe', (req, res) => {
+  const { endpoint } = req.body || {};
+  if (typeof endpoint !== 'string') return res.status(400).json({ error: 'endpoint is required' });
+  removeSubscription(endpoint);
+  res.json({ ok: true, devices: subscriptionCount() });
+});
+
+app.post('/api/push/test', async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (typeof endpoint !== 'string') return res.status(400).json({ error: 'endpoint is required' });
+  const delivered = await sendPush(
+    { title: 'Unified Calendar', body: 'Notifications work on this device.', tag: 'test', url: '/' },
+    { subject: PUSH_SUBJECT, endpoint }
+  );
+  if (!delivered) return res.status(502).json({ error: 'The push service did not accept the notification' });
+  res.json({ ok: true });
 });
 
 // Stars/unstars ONE event id, the same read-modify-write the widget uses (POST /api/widget/important).

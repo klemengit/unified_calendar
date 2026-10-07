@@ -157,6 +157,43 @@
       <p class="saved-note" id="view-saved-note"></p>
     </section>
 
+    <!-- Reminders (web push) -->
+    <section class="card" id="reminders-card">
+      <h2>Reminders</h2>
+      <p class="hint">Notifications before your events, sent by the server even when the app is closed. Turn them on for each device you want them on.</p>
+      <div class="field row">
+        <label id="push-status">This device: off</label>
+        <span>
+          <button type="button" id="push-test" class="hidden">Test</button>
+          <button type="button" id="push-toggle">Turn on</button>
+        </span>
+      </div>
+      <div class="field">
+        <label for="reminderLead">Remind me</label>
+        <select id="reminderLead">
+          <option value="0">At the start</option>
+          <option value="5">5 minutes before</option>
+          <option value="10">10 minutes before</option>
+          <option value="15">15 minutes before</option>
+          <option value="30">30 minutes before</option>
+          <option value="60">1 hour before</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="reminderAllDay">All-day events</label>
+        <select id="reminderAllDay">
+          <option value="off">No reminder</option>
+          <option value="6">At 6:00</option>
+          <option value="7">At 7:00</option>
+          <option value="8">At 8:00</option>
+          <option value="9">At 9:00</option>
+        </select>
+      </div>
+      <p class="hint" style="margin-top:12px">Calendars that send reminders:</p>
+      <div id="reminder-cals"></div>
+      <p class="saved-note" id="reminder-saved-note"></p>
+    </section>
+
     <!-- Account logins -->
     <section class="card">
       <h2>Accounts (login)</h2>

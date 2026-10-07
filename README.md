@@ -78,6 +78,20 @@ Events from the last sync are available offline via the client-side cache.
 To force-refresh cached assets after an app update, bump `CACHE_NAME` in
 `public/sw.js` from `cal-v1` to `cal-v2` (or any new value).
 
+### Reminders
+
+**⚙ Settings → Reminders** turns on push notifications for the device you are
+on: a reminder a set time before each event, and one at a set hour for all-day
+events, with a switch per calendar. The server sends them, so they arrive while
+the app is closed, on phones (installed app) and desktop browsers alike — a
+desktop browser has to be running to receive them. Turn them on once per device.
+
+The server keeps its push key pair, the subscribed devices and hashes of the
+reminders already sent in `data/push.json` (mode `0600`). Each reminder carries
+the event's title, time and location; it is encrypted for the device, so the
+browser's push service (Google's, for Chrome) relays it without being able to
+read it.
+
 ---
 
 ## Optional password authentication
