@@ -542,10 +542,11 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 }
 
 /* ── Period change slide ──
-   app.js moves the view sideways with the finger and slides it out and in on
-   a period change; the calendar card clips it. pan-y leaves vertical scrolling
-   to the browser and sideways drags to app.js. */
-#calendar { overflow: hidden; }
+   app.js moves the view sideways with the finger, next to a frozen copy of
+   the period it is leaving (.fc-peek-snapshot); the calendar card clips
+   both. pan-y leaves vertical scrolling to the browser and sideways drags
+   to app.js. */
+#calendar { overflow: hidden; position: relative; }
 #calendar .fc-view-harness { touch-action: pan-y; }
 
 /* ── Day and Week all-day row ──

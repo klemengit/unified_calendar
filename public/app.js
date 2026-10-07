@@ -812,66 +812,110 @@ function initCalendar() {
 
 // ── Swipe to the previous or next period ──
 //
-// The calendar panel follows a sideways drag. Let go past SWIPE_COMMIT of its
-// width, or flick it quickly, and the panel slides out that way while the next
-// period slides in from the other side; otherwise it springs back. The ‹ ›
-// buttons run the same slide. A drag that starts mostly vertical is left to
-// scroll the day grid, and FullCalendar's long-press (1 s) to move an event or
-// select a time never moves the panel, since that drag starts from rest.
+// The calendar panel follows a sideways drag with the neighbouring period
+// already beside it, the way a phone's home screens move. As soon as a drag
+// turns sideways, the current panel is frozen into a static copy and the real
+// calendar switches to the neighbour on the side being uncovered; the two move
+// together under the finger. Let go past SWIPE_COMMIT of the width, or flick,
+// and the neighbour slides into place; otherwise both spring back and the
+// calendar returns to the original period. The ‹ › buttons run the same slide.
+// A drag that starts mostly vertical is left to scroll the day grid, and
+// FullCalendar's long-press (1 s) to move an event never moves the panel.
 
 const SWIPE_LOCK_PX = 10;      // movement before a drag counts as sideways or not
 const SWIPE_COMMIT = 0.25;     // share of the width that changes the period
 const SWIPE_FLICK_PX = 50;     // or this far, quickly
 const SWIPE_FLICK_MS = 300;
-const SLIDE_MS = 180;
+const SLIDE_MS = 200;
 
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
 function harnessEl() {
-  return document.querySelector('#calendar .fc-view-harness');
+  return document.querySelector('#calendar .fc-view-harness:not(.fc-peek-snapshot)');
 }
 
+// { snapshot, shown, width } while a slide is in progress. `shown` is the
+// period the real calendar shows, relative to where the slide began: -1, 0, 1.
+let peek = null;
 let sliding = false;
 
-// Slides the panel out towards `direction`'s side, changes the period, and
-// slides the new one in from the opposite side.
-function slideTo(direction) {
-  const step = () => (direction === 'next' ? calendar.next() : calendar.prev());
+function startPeek() {
   const harness = harnessEl();
-  if (!harness || reducedMotion()) { step(); return; }
-  if (sliding) return;
+  if (!harness) return false;
+  const snapshot = harness.cloneNode(true);
+  snapshot.classList.add('fc-peek-snapshot');
+  Object.assign(snapshot.style, {
+    position: 'absolute',
+    left: `${harness.offsetLeft}px`,
+    top: `${harness.offsetTop}px`,
+    width: `${harness.offsetWidth}px`,
+    height: `${harness.offsetHeight}px`,
+    zIndex: '1',
+    pointerEvents: 'none',
+  });
+  harness.parentNode.appendChild(snapshot);
+  // A copy starts unscrolled; keep the hours the user was looking at.
+  const from = harness.querySelectorAll('.fc-scroller');
+  snapshot.querySelectorAll('.fc-scroller').forEach((el, i) => {
+    el.scrollTop = from[i]?.scrollTop ?? 0;
+    el.scrollLeft = from[i]?.scrollLeft ?? 0;
+  });
+  peek = { snapshot, shown: 0, width: harness.offsetWidth };
+  return true;
+}
+
+function showPeriod(target) {
+  while (peek.shown < target) { calendar.next(); peek.shown++; }
+  while (peek.shown > target) { calendar.prev(); peek.shown--; }
+}
+
+// The frozen copy at `dx`, the live calendar beside it on the side of `shown`.
+function placePeek(dx, animate) {
+  const harness = harnessEl();
+  const transition = animate ? `transform ${SLIDE_MS}ms ease-out` : 'none';
+  for (const el of [peek.snapshot, harness]) el.style.transition = transition;
+  peek.snapshot.style.transform = `translateX(${dx}px)`;
+  harness.style.transform = `translateX(${dx + peek.shown * peek.width}px)`;
+}
+
+// Slides to the neighbour (commit) or back to where the slide began.
+function endPeek(commit) {
   sliding = true;
-  const width = harness.offsetWidth;
-  const sign = direction === 'next' ? -1 : 1;
-  harness.style.transition = `transform ${SLIDE_MS}ms ease-in`;
-  harness.style.transform = `translateX(${sign * width}px)`;
+  const { snapshot, shown, width } = peek;
+  if (commit) placePeek(-shown * width, true);
+  else placePeek(0, true);
   setTimeout(() => {
-    harness.style.transition = 'none';
-    step();
-    requestAnimationFrame(() => {
-      const next = harnessEl() ?? harness;
-      next.style.transition = 'none';
-      next.style.transform = `translateX(${-sign * width}px)`;
-      void next.offsetWidth; // apply the start position before animating
-      next.style.transition = `transform ${SLIDE_MS}ms ease-out`;
-      next.style.transform = '';
-      setTimeout(() => { next.style.transition = ''; sliding = false; }, SLIDE_MS);
-    });
+    const harness = harnessEl();
+    if (!commit) showPeriod(0);
+    harness.style.transition = '';
+    harness.style.transform = '';
+    // Going back re-renders the original under the copy; let it settle first.
+    setTimeout(() => {
+      snapshot.remove();
+      peek = null;
+      sliding = false;
+    }, commit ? 0 : 150);
   }, SLIDE_MS);
+}
+
+function slideTo(direction) {
+  const target = direction === 'next' ? 1 : -1;
+  if (sliding || peek) return;
+  if (reducedMotion() || !startPeek()) {
+    if (target > 0) calendar.next(); else calendar.prev();
+    return;
+  }
+  showPeriod(target);
+  placePeek(0, false);
+  void harnessEl().offsetWidth; // apply the start positions before animating
+  endPeek(true);
 }
 
 function setupSwipe(el) {
   let start = null;
   let mode = null; // null until SWIPE_LOCK_PX, then 'x' (ours) or 'y' (scroll)
 
-  el.addEventListener('touchstart', (ev) => {
-    if (sliding || ev.touches.length !== 1) { start = null; return; }
-    const t = ev.touches[0];
-    start = { x: t.clientX, y: t.clientY, time: Date.now() };
-    mode = null;
-  }, { passive: true });
-
-  el.addEventListener('touchmove', (ev) => {
+  const onMove = (ev) => {
     if (!start) return;
     const t = ev.touches[0];
     const dx = t.clientX - start.x;
@@ -884,30 +928,43 @@ function setupSwipe(el) {
       if (mode === 'x') closeViewMenu();
     }
     if (mode !== 'x' || reducedMotion()) return;
-    const harness = harnessEl();
-    if (!harness) return;
-    harness.style.transition = 'none';
-    harness.style.transform = `translateX(${dx}px)`;
-  }, { passive: true });
+    if (!peek && !startPeek()) return;
+    const want = dx < 0 ? 1 : dx > 0 ? -1 : peek.shown;
+    if (want !== peek.shown) showPeriod(want);
+    placePeek(dx, false);
+  };
 
-  const finish = (ev) => {
+  const onEnd = (ev) => {
+    start?.target.removeEventListener('touchmove', onMove);
+    start?.target.removeEventListener('touchend', onEnd);
+    start?.target.removeEventListener('touchcancel', onEnd);
     if (!start || mode !== 'x') { start = null; return; }
     const t = ev.changedTouches[0];
     const dx = t ? t.clientX - start.x : 0;
     const quick = Date.now() - start.time <= SWIPE_FLICK_MS;
     start = null;
-    const harness = harnessEl();
-    const width = harness?.offsetWidth || el.offsetWidth;
     const commit = ev.type === 'touchend'
-      && (Math.abs(dx) >= width * SWIPE_COMMIT || (quick && Math.abs(dx) >= SWIPE_FLICK_PX));
-    if (commit) { slideTo(dx < 0 ? 'next' : 'prev'); return; }
-    if (harness) {
-      harness.style.transition = `transform ${SLIDE_MS}ms ease-out`;
-      harness.style.transform = '';
+      && (Math.abs(dx) >= el.offsetWidth * SWIPE_COMMIT || (quick && Math.abs(dx) >= SWIPE_FLICK_PX));
+    if (!peek) {
+      // Reduced motion: no panel movement, just the change.
+      if (commit) { if (dx < 0) calendar.next(); else calendar.prev(); }
+      return;
     }
+    endPeek(commit && peek.shown !== 0);
   };
-  el.addEventListener('touchend', finish, { passive: true });
-  el.addEventListener('touchcancel', finish, { passive: true });
+
+  // Changing the period mid-drag re-renders the grid and detaches the element
+  // the finger started on. Touch events keep going to that element but no
+  // longer bubble up to `el`, so listen on the element itself.
+  el.addEventListener('touchstart', (ev) => {
+    if (sliding || peek || ev.touches.length !== 1) { start = null; return; }
+    const t = ev.touches[0];
+    start = { x: t.clientX, y: t.clientY, time: Date.now(), target: ev.target };
+    mode = null;
+    ev.target.addEventListener('touchmove', onMove, { passive: true });
+    ev.target.addEventListener('touchend', onEnd, { passive: true });
+    ev.target.addEventListener('touchcancel', onEnd, { passive: true });
+  }, { passive: true });
 
   // The ‹ › buttons slide too: catch their clicks before FullCalendar does.
   el.addEventListener('click', (ev) => {
