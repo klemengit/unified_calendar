@@ -836,8 +836,26 @@ function setupSwipe(el) {
     if (!quick || Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < 2 * Math.abs(dy)) return;
     closeViewMenu();
     if (dx < 0) calendar.next(); else calendar.prev();
+    slideIn(dx < 0 ? 'next' : 'prev');
   }, { passive: true });
   el.addEventListener('touchcancel', () => { start = null; }, { passive: true });
+
+  // The ‹ › buttons slide the same way.
+  el.addEventListener('click', (ev) => {
+    if (ev.target.closest('.fc-next-button')) slideIn('next');
+    else if (ev.target.closest('.fc-prev-button')) slideIn('prev');
+  });
+}
+
+// A short slide of the new period in from the side it came from, so a change
+// of week or month is visible and its direction clear (styles.css).
+function slideIn(direction) {
+  const harness = document.querySelector('#calendar .fc-view-harness');
+  if (!harness) return;
+  harness.classList.remove('slide-next', 'slide-prev');
+  void harness.offsetWidth; // restart the animation on quick repeats
+  harness.classList.add(`slide-${direction}`);
+  harness.addEventListener('animationend', () => harness.classList.remove('slide-next', 'slide-prev'), { once: true });
 }
 
 function setupJumpTo() {

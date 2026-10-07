@@ -486,7 +486,7 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 @media (max-width: 768px) {
   /* Edge to edge: on a phone every pixel of margin is a pixel of calendar. */
   main { padding: 0; }
-  main #calendar { padding: 4px 2px 0; border-radius: 0; box-shadow: none; }
+  main #calendar { padding: 4px 2px 0; border-radius: 0; box-shadow: none; overflow: hidden; }
 
   /* FullCalendar mobile tweaks: the header holds only the title; the
      buttons sit in the footer, within reach of the thumb (app.js). */
@@ -529,6 +529,17 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ── Period change slide ──
+   app.js adds slide-next / slide-prev to the view on a swipe or ‹ › press. */
+@keyframes slide-from-right { from { transform: translateX(48px); opacity: 0.2; } }
+@keyframes slide-from-left { from { transform: translateX(-48px); opacity: 0.2; } }
+.fc-view-harness.slide-next { animation: slide-from-right 0.22s ease-out; }
+.fc-view-harness.slide-prev { animation: slide-from-left 0.22s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .fc-view-harness.slide-next,
+  .fc-view-harness.slide-prev { animation: none; }
 }
 
 /* ── Day and Week all-day row ──
