@@ -488,6 +488,16 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   main { padding: 0; }
   main #calendar { padding: 4px 2px 0; border-radius: 0; box-shadow: none; overflow: hidden; }
 
+  /* The drawer's ☰ sits at the bottom, where the footer's ☰ opened it. */
+  .sidebar .sidebar-header {
+    order: 99;
+    margin-top: auto;
+    position: sticky;
+    bottom: 0;
+    padding: 8px 0 4px;
+    background: var(--card);
+  }
+
   /* FullCalendar mobile tweaks: the header holds only the title; the
      buttons sit in the footer, within reach of the thumb (app.js). */
   .fc .fc-toolbar.fc-header-toolbar { margin: 4px 6px 6px; }
