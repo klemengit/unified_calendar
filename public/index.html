@@ -194,6 +194,18 @@
   <script src="/app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
+      // A new deploy installs a new worker, which drops the old cache and takes
+      // over this page; reload once so the new version shows now rather than on
+      // the next launch. Not on the first install (no previous worker), and not
+      // while a dialog is open, where a reload would lose what was typed.
+      const hadWorker = Boolean(navigator.serviceWorker.controller);
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadWorker || reloading) return;
+        if (document.querySelector('.modal-overlay:not(.hidden)')) return;
+        reloading = true;
+        location.reload();
+      });
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
   </script>
