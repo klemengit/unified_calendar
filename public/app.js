@@ -444,9 +444,12 @@ function buildToolbarRight(enabledViews) {
 // On smaller screens the row of view buttons wraps the toolbar onto two
 // lines, so below VIEW_MENU_QUERY it becomes a single "Week ▾" button that
 // opens a menu of the same views. The closed drawer sidebar is hidden there
-// too, so the toolbar also carries the ☰ that opens it.
+// too, so the toolbar also carries the ☰ that opens it. On phones the
+// buttons move to a footer bar, within reach of the thumb, and the header
+// keeps only the title.
 
 const VIEW_MENU_QUERY = '(max-width: 1280px)';
+const PHONE_QUERY = '(max-width: 768px)';
 
 const VIEW_LABELS = {
   timeGridDay: 'Day',
@@ -468,6 +471,29 @@ function headerToolbarFor(useMenu) {
     center: 'title',
     right: useMenu ? 'viewMenu' : buildToolbarRight(settings.enabledViews),
   };
+}
+
+function isPhoneWidth() {
+  return window.matchMedia?.(PHONE_QUERY).matches ?? false;
+}
+
+// { headerToolbar, footerToolbar } for the current width.
+function toolbarsForWidth() {
+  if (isPhoneWidth()) {
+    return {
+      headerToolbar: { left: '', center: 'title', right: '' },
+      footerToolbar: { left: 'sidebarToggle prev,next today', center: '', right: 'viewMenu' },
+    };
+  }
+  return { headerToolbar: headerToolbarFor(isViewMenuWidth()), footerToolbar: false };
+}
+
+function applyToolbars() {
+  closeViewMenu();
+  const { headerToolbar, footerToolbar } = toolbarsForWidth();
+  calendar.setOption('headerToolbar', headerToolbar);
+  calendar.setOption('footerToolbar', footerToolbar);
+  updateViewMenuLabel(calendar.view.type);
 }
 
 function updateViewMenuLabel(viewType) {
@@ -506,7 +532,9 @@ function toggleViewMenu(button) {
   document.body.appendChild(menu);
 
   const r = button.getBoundingClientRect();
-  menu.style.top = `${r.bottom + 4}px`;
+  // Below the button, or above it when it sits in the phone footer.
+  const below = r.bottom + 4 + menu.offsetHeight <= window.innerHeight;
+  menu.style.top = `${below ? r.bottom + 4 : r.top - 4 - menu.offsetHeight}px`;
   menu.style.left = `${Math.max(8, r.right - menu.offsetWidth)}px`;
   document.addEventListener('pointerdown', onViewMenuOutside, true);
 }
@@ -695,7 +723,7 @@ function initCalendar() {
       multiMonthYear: { buttonText: 'Year' },
       listMonth: { buttonText: 'Agenda' },
     },
-    headerToolbar: headerToolbarFor(isViewMenuWidth()),
+    ...toolbarsForWidth(),
     customButtons: {
       viewMenu: { text: 'View', hint: 'Change view', click: (ev) => toggleViewMenu(ev.currentTarget) },
       sidebarToggle: { text: '☰', hint: 'Show sidebar', click: () => applySidebarCollapsed(false) },
@@ -768,11 +796,9 @@ function initCalendar() {
     });
   }).observe(document.getElementById('calendar'));
 
-  window.matchMedia?.(VIEW_MENU_QUERY).addEventListener?.('change', (e) => {
-    closeViewMenu();
-    calendar.setOption('headerToolbar', headerToolbarFor(e.matches));
-    updateViewMenuLabel(calendar.view.type);
-  });
+  for (const query of [VIEW_MENU_QUERY, PHONE_QUERY]) {
+    window.matchMedia?.(query).addEventListener?.('change', applyToolbars);
+  }
 
   document.getElementById('open-google').addEventListener('click', () => {
     window.open(providerUrl('google'), '_blank', 'noopener');

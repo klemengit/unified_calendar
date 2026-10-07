@@ -488,11 +488,12 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
   main { padding: 0; }
   main #calendar { padding: 4px 2px 0; border-radius: 0; box-shadow: none; }
 
-  /* FullCalendar mobile tweaks: two toolbar rows, the title alone on the
-     first so it can be read, the buttons spread across the second. */
-  .fc .fc-toolbar.fc-header-toolbar { flex-wrap: wrap; row-gap: 6px; column-gap: 4px; margin: 4px 4px 8px; }
+  /* FullCalendar mobile tweaks: the header holds only the title; the
+     buttons sit in the footer, within reach of the thumb (app.js). */
+  .fc .fc-toolbar.fc-header-toolbar { margin: 4px 6px 6px; }
+  .fc .fc-toolbar.fc-footer-toolbar { margin: 6px 4px 6px; gap: 4px; }
   .fc .fc-toolbar-chunk { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-  .fc .fc-toolbar-chunk:nth-child(2) { order: -1; flex: 1 0 100%; min-width: 0; text-align: center; }
+  .fc .fc-header-toolbar .fc-toolbar-chunk:nth-child(2) { flex: 1 1 auto; min-width: 0; }
   .fc .fc-button { padding: 9px 12px !important; font-size: 0.9rem !important; line-height: 1.2; }
   .fc .fc-button-group > .fc-button { padding: 9px 14px !important; }
   .fc .fc-toolbar-title {
