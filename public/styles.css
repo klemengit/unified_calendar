@@ -542,15 +542,11 @@ body.sidebar-collapsed .sidebar-header > :not(#sidebar-toggle) {
 }
 
 /* ── Period change slide ──
-   app.js adds slide-next / slide-prev to the view on a swipe or ‹ › press. */
-@keyframes slide-from-right { from { transform: translateX(48px); opacity: 0.2; } }
-@keyframes slide-from-left { from { transform: translateX(-48px); opacity: 0.2; } }
-.fc-view-harness.slide-next { animation: slide-from-right 0.22s ease-out; }
-.fc-view-harness.slide-prev { animation: slide-from-left 0.22s ease-out; }
-@media (prefers-reduced-motion: reduce) {
-  .fc-view-harness.slide-next,
-  .fc-view-harness.slide-prev { animation: none; }
-}
+   app.js moves the view sideways with the finger and slides it out and in on
+   a period change; the calendar card clips it. pan-y leaves vertical scrolling
+   to the browser and sideways drags to app.js. */
+#calendar { overflow: hidden; }
+#calendar .fc-view-harness { touch-action: pan-y; }
 
 /* ── Day and Week all-day row ──
    FullCalendar keeps 2em open for all-day events even when there are none;

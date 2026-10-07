@@ -812,50 +812,111 @@ function initCalendar() {
 
 // ── Swipe to the previous or next period ──
 //
-// A quick sideways swipe on the calendar does what the ‹ › buttons do. It must
-// be mostly horizontal, so scrolling the day grid never triggers it, and short,
-// so FullCalendar's long-press (1 s) to drag an event or select a time is left
-// alone.
+// The calendar panel follows a sideways drag. Let go past SWIPE_COMMIT of its
+// width, or flick it quickly, and the panel slides out that way while the next
+// period slides in from the other side; otherwise it springs back. The ‹ ›
+// buttons run the same slide. A drag that starts mostly vertical is left to
+// scroll the day grid, and FullCalendar's long-press (1 s) to move an event or
+// select a time never moves the panel, since that drag starts from rest.
 
-const SWIPE_MIN_PX = 60;
-const SWIPE_MAX_MS = 600;
+const SWIPE_LOCK_PX = 10;      // movement before a drag counts as sideways or not
+const SWIPE_COMMIT = 0.25;     // share of the width that changes the period
+const SWIPE_FLICK_PX = 50;     // or this far, quickly
+const SWIPE_FLICK_MS = 300;
+const SLIDE_MS = 180;
+
+const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+function harnessEl() {
+  return document.querySelector('#calendar .fc-view-harness');
+}
+
+let sliding = false;
+
+// Slides the panel out towards `direction`'s side, changes the period, and
+// slides the new one in from the opposite side.
+function slideTo(direction) {
+  const step = () => (direction === 'next' ? calendar.next() : calendar.prev());
+  const harness = harnessEl();
+  if (!harness || reducedMotion()) { step(); return; }
+  if (sliding) return;
+  sliding = true;
+  const width = harness.offsetWidth;
+  const sign = direction === 'next' ? -1 : 1;
+  harness.style.transition = `transform ${SLIDE_MS}ms ease-in`;
+  harness.style.transform = `translateX(${sign * width}px)`;
+  setTimeout(() => {
+    harness.style.transition = 'none';
+    step();
+    requestAnimationFrame(() => {
+      const next = harnessEl() ?? harness;
+      next.style.transition = 'none';
+      next.style.transform = `translateX(${-sign * width}px)`;
+      void next.offsetWidth; // apply the start position before animating
+      next.style.transition = `transform ${SLIDE_MS}ms ease-out`;
+      next.style.transform = '';
+      setTimeout(() => { next.style.transition = ''; sliding = false; }, SLIDE_MS);
+    });
+  }, SLIDE_MS);
+}
 
 function setupSwipe(el) {
   let start = null;
+  let mode = null; // null until SWIPE_LOCK_PX, then 'x' (ours) or 'y' (scroll)
+
   el.addEventListener('touchstart', (ev) => {
+    if (sliding || ev.touches.length !== 1) { start = null; return; }
     const t = ev.touches[0];
-    start = ev.touches.length === 1 ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
+    start = { x: t.clientX, y: t.clientY, time: Date.now() };
+    mode = null;
   }, { passive: true });
-  el.addEventListener('touchend', (ev) => {
+
+  el.addEventListener('touchmove', (ev) => {
     if (!start) return;
-    const t = ev.changedTouches[0];
+    const t = ev.touches[0];
     const dx = t.clientX - start.x;
     const dy = t.clientY - start.y;
-    const quick = Date.now() - start.time <= SWIPE_MAX_MS;
-    start = null;
-    if (!quick || Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < 2 * Math.abs(dy)) return;
-    closeViewMenu();
-    if (dx < 0) calendar.next(); else calendar.prev();
-    slideIn(dx < 0 ? 'next' : 'prev');
+    if (!mode) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_LOCK_PX) return;
+      // An event or time selection being dragged owns this touch.
+      const fcDrag = document.querySelector('.fc-event-mirror, .fc-event-dragging');
+      mode = !fcDrag && Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      if (mode === 'x') closeViewMenu();
+    }
+    if (mode !== 'x' || reducedMotion()) return;
+    const harness = harnessEl();
+    if (!harness) return;
+    harness.style.transition = 'none';
+    harness.style.transform = `translateX(${dx}px)`;
   }, { passive: true });
-  el.addEventListener('touchcancel', () => { start = null; }, { passive: true });
 
-  // The ‹ › buttons slide the same way.
+  const finish = (ev) => {
+    if (!start || mode !== 'x') { start = null; return; }
+    const t = ev.changedTouches[0];
+    const dx = t ? t.clientX - start.x : 0;
+    const quick = Date.now() - start.time <= SWIPE_FLICK_MS;
+    start = null;
+    const harness = harnessEl();
+    const width = harness?.offsetWidth || el.offsetWidth;
+    const commit = ev.type === 'touchend'
+      && (Math.abs(dx) >= width * SWIPE_COMMIT || (quick && Math.abs(dx) >= SWIPE_FLICK_PX));
+    if (commit) { slideTo(dx < 0 ? 'next' : 'prev'); return; }
+    if (harness) {
+      harness.style.transition = `transform ${SLIDE_MS}ms ease-out`;
+      harness.style.transform = '';
+    }
+  };
+  el.addEventListener('touchend', finish, { passive: true });
+  el.addEventListener('touchcancel', finish, { passive: true });
+
+  // The ‹ › buttons slide too: catch their clicks before FullCalendar does.
   el.addEventListener('click', (ev) => {
-    if (ev.target.closest('.fc-next-button')) slideIn('next');
-    else if (ev.target.closest('.fc-prev-button')) slideIn('prev');
-  });
-}
-
-// A short slide of the new period in from the side it came from, so a change
-// of week or month is visible and its direction clear (styles.css).
-function slideIn(direction) {
-  const harness = document.querySelector('#calendar .fc-view-harness');
-  if (!harness) return;
-  harness.classList.remove('slide-next', 'slide-prev');
-  void harness.offsetWidth; // restart the animation on quick repeats
-  harness.classList.add(`slide-${direction}`);
-  harness.addEventListener('animationend', () => harness.classList.remove('slide-next', 'slide-prev'), { once: true });
+    const button = ev.target.closest('.fc-prev-button, .fc-next-button');
+    if (!button) return;
+    ev.stopPropagation();
+    closeViewMenu();
+    slideTo(button.classList.contains('fc-next-button') ? 'next' : 'prev');
+  }, true);
 }
 
 function setupJumpTo() {
