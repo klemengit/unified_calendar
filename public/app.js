@@ -27,6 +27,10 @@ let writeableCals = [];     // [{ id: 'gcal_primary', name: 'My Calendar' }]
 // Whether the event being edited came with its guest list. Events cached before
 // guest support did not, and then the field must not be taken as "no guests".
 let editingGuestsKnown = false;
+// The occurrence being edited when it belongs to a repeating series, and the
+// series' repeat as the form first showed it (to tell whether it changed).
+let editingOccurrence = null; // { seriesId, occurrenceStart } or null
+let editingRepeat = { repeat: 'none', repeatUntil: null };
 
 function contrastColor(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
@@ -112,7 +116,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupModals();
   setupJumpTo();
   setupSidebar();
-  setupSidebarCollapse();
   setupBackgroundSync(settings.syncInterval ?? 15);
   updateLastSyncedDisplay();
   setInterval(updateLastSyncedDisplay, 60000);
@@ -331,66 +334,51 @@ function timeFmt() {
   return { hour: hour12 ? 'numeric' : '2-digit', minute: '2-digit', hour12 };
 }
 
-// ── Sidebar drawer (mobile) ──
-
-function setupSidebar() {
-  const toggle = document.getElementById('sidebar-toggle');
-  const close = document.getElementById('sidebar-close');
-  const backdrop = document.getElementById('sidebar-backdrop');
-  if (!toggle) return;
-  toggle.addEventListener('click', () => {
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar.classList.contains('open')) closeSidebar(); else openSidebar();
-  });
-  close?.addEventListener('click', closeSidebar);
-  backdrop?.addEventListener('click', closeSidebar);
-}
-
-function openSidebar() {
-  document.getElementById('sidebar').classList.add('open');
-  document.getElementById('sidebar-backdrop').classList.add('visible');
-}
-
-function closeSidebar() {
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('sidebar-backdrop').classList.remove('visible');
-}
-
-// ── Sidebar rail (expanded / icon-only) ──
+// ── Sidebar ──
 //
-// Independent of the mobile open/close drawer above: this fully hides the
-// sidebar, leaving only a small floating arrow to bring it back. Persisted so
-// it survives reloads, and restored on init.
+// One ☰ button toggles body.sidebar-collapsed, which shrinks the sidebar to
+// that button alone. Wide screens dock the open sidebar beside the calendar
+// and remember the choice. At SIDEBAR_DRAWER_QUERY widths it opens as a drawer
+// over the calendar instead, and always starts closed.
 
-function applySidebarCollapsed(collapsed) {
+const SIDEBAR_DRAWER_QUERY = '(max-width: 1280px)';
+
+function isDrawerWidth() {
+  return window.matchMedia?.(SIDEBAR_DRAWER_QUERY).matches ?? false;
+}
+
+function storedSidebarCollapsed() {
+  try { return localStorage.getItem(SIDEBAR_STATE_KEY) === 'collapsed'; } catch { return false; }
+}
+
+function applySidebarCollapsed(collapsed, { persist = true } = {}) {
   document.body.classList.toggle('sidebar-collapsed', collapsed);
 
-  const btn = document.getElementById('sidebar-rail-toggle');
+  const btn = document.getElementById('sidebar-toggle');
   if (btn) {
-    btn.setAttribute('aria-label', 'Hide sidebar');
-    btn.title = 'Hide sidebar';
-    btn.setAttribute('aria-pressed', String(collapsed));
+    btn.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+    btn.setAttribute('aria-expanded', String(!collapsed));
   }
-  const restore = document.getElementById('sidebar-restore');
-  if (restore) restore.setAttribute('aria-expanded', String(!collapsed));
 
-  try { localStorage.setItem(SIDEBAR_STATE_KEY, collapsed ? 'collapsed' : 'expanded'); } catch { /* private mode, quota, etc. */ }
+  if (persist && !isDrawerWidth()) {
+    try { localStorage.setItem(SIDEBAR_STATE_KEY, collapsed ? 'collapsed' : 'expanded'); } catch { /* private mode, quota, etc. */ }
+  }
 
-  // The grid keeps its old pixel width until FullCalendar re-measures, which is
-  // what made the previous rail overflow the viewport. Re-measure after the
-  // layout has settled.
-  requestAnimationFrame(() => calendar?.updateSize());
 }
 
-function setupSidebarCollapse() {
-  let stored;
-  try { stored = localStorage.getItem(SIDEBAR_STATE_KEY); } catch { /* private mode */ }
-  applySidebarCollapsed(stored === 'collapsed');
+function setupSidebar() {
+  applySidebarCollapsed(isDrawerWidth() || storedSidebarCollapsed(), { persist: false });
 
-  document.getElementById('sidebar-rail-toggle')
-    ?.addEventListener('click', () => applySidebarCollapsed(true));
-  document.getElementById('sidebar-restore')
-    ?.addEventListener('click', () => applySidebarCollapsed(false));
+  document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
+    applySidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+  });
+  document.getElementById('sidebar-backdrop')?.addEventListener('click', () => applySidebarCollapsed(true));
+
+  // Crossing into drawer widths closes the sidebar; crossing back restores the
+  // docked state the user last chose.
+  window.matchMedia?.(SIDEBAR_DRAWER_QUERY).addEventListener?.('change', (e) => {
+    applySidebarCollapsed(e.matches || storedSidebarCollapsed(), { persist: false });
+  });
 }
 
 // ── Body / theme attributes ──
@@ -449,6 +437,180 @@ function buildToolbarRight(enabledViews) {
   const enabled = Array.isArray(enabledViews) && enabledViews.length ? enabledViews : VIEW_ORDER;
   const ordered = VIEW_ORDER.filter((id) => enabled.includes(id));
   return (ordered.length ? ordered : VIEW_ORDER).join(',');
+}
+
+// ── Header toolbar: view buttons or one dropdown ──
+//
+// On smaller screens the row of view buttons wraps the toolbar onto two
+// lines, so below VIEW_MENU_QUERY it becomes a single "Week ▾" button that
+// opens a menu of the same views. The closed drawer sidebar is hidden there
+// too, so the toolbar also carries the ☰ that opens it. On phones the
+// buttons move to a footer bar, within reach of the thumb, and the header
+// keeps only the title.
+
+const VIEW_MENU_QUERY = '(max-width: 1280px)';
+const PHONE_QUERY = '(max-width: 768px)';
+
+const VIEW_LABELS = {
+  timeGridDay: 'Day',
+  timeGridWeek: 'Week',
+  dayGridMonth: 'Month',
+  multiMonth2: '2 mo',
+  multiMonth4: '4 mo',
+  multiMonthYear: 'Year',
+  listMonth: 'Agenda',
+};
+
+function isViewMenuWidth() {
+  return window.matchMedia?.(VIEW_MENU_QUERY).matches ?? false;
+}
+
+function headerToolbarFor(useMenu) {
+  return {
+    left: useMenu ? 'sidebarToggle prev,next today' : 'prev,next today',
+    center: 'title',
+    right: useMenu ? 'viewMenu' : buildToolbarRight(settings.enabledViews),
+  };
+}
+
+function isPhoneWidth() {
+  return window.matchMedia?.(PHONE_QUERY).matches ?? false;
+}
+
+// { headerToolbar, footerToolbar } for the current width.
+function toolbarsForWidth() {
+  if (isPhoneWidth()) {
+    return {
+      headerToolbar: { left: '', center: 'title', right: '' },
+      footerToolbar: { left: 'sidebarToggle prev,next today', center: '', right: 'viewMenu' },
+    };
+  }
+  return { headerToolbar: headerToolbarFor(isViewMenuWidth()), footerToolbar: false };
+}
+
+function applyToolbars() {
+  closeViewMenu();
+  const { headerToolbar, footerToolbar } = toolbarsForWidth();
+  calendar.setOption('headerToolbar', headerToolbar);
+  calendar.setOption('footerToolbar', footerToolbar);
+  updateViewMenuLabel(calendar.view.type);
+}
+
+function updateViewMenuLabel(viewType) {
+  const btn = document.querySelector('#calendar .fc-viewMenu-button');
+  if (btn) btn.textContent = `${VIEW_LABELS[viewType] ?? 'View'} ▾`;
+}
+
+function closeViewMenu() {
+  document.getElementById('view-menu')?.remove();
+  document.removeEventListener('pointerdown', onViewMenuOutside, true);
+}
+
+function onViewMenuOutside(ev) {
+  if (!ev.target.closest('#view-menu, .fc-viewMenu-button')) closeViewMenu();
+}
+
+function toggleViewMenu(button) {
+  if (document.getElementById('view-menu')) { closeViewMenu(); return; }
+
+  const menu = document.createElement('div');
+  menu.id = 'view-menu';
+  menu.className = 'view-menu';
+  menu.setAttribute('role', 'menu');
+  for (const id of buildToolbarRight(settings.enabledViews).split(',')) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.setAttribute('role', 'menuitem');
+    item.textContent = VIEW_LABELS[id] ?? id;
+    item.classList.toggle('active', id === calendar.view.type);
+    item.addEventListener('click', () => {
+      closeViewMenu();
+      calendar.changeView(id);
+    });
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+
+  const r = button.getBoundingClientRect();
+  // Below the button, or above it when it sits in the phone footer.
+  const below = r.bottom + 4 + menu.offsetHeight <= window.innerHeight;
+  menu.style.top = `${below ? r.bottom + 4 : r.top - 4 - menu.offsetHeight}px`;
+  menu.style.left = `${Math.max(8, r.right - menu.offsetWidth)}px`;
+  document.addEventListener('pointerdown', onViewMenuOutside, true);
+}
+
+// ── Week number beside the toolbar title ──
+//
+// Shown as "W41", or "W40–44" for a month, using FullCalendar's own week
+// numbering (the same as the grid's "W 41"). Left off views spanning more than
+// six weeks, where a week range says little. CSS renders it from data-week.
+
+const MAX_TITLE_WEEKS = 6;
+
+function updateTitleWeek(view) {
+  const title = document.querySelector('#calendar .fc-toolbar-title');
+  if (!title) return;
+
+  const lastDay = new Date(view.currentEnd.getTime() - 86400000);
+  const spanWeeks = (view.currentEnd - view.currentStart) / (7 * 86400000);
+  if (spanWeeks > MAX_TITLE_WEEKS) {
+    delete title.dataset.week;
+    return;
+  }
+
+  const first = calendar.formatDate(view.currentStart, { week: 'numeric' });
+  const last = calendar.formatDate(lastDay, { week: 'numeric' });
+  title.dataset.week = first === last ? `W${first}` : `W${first}–${last}`;
+}
+
+// ── Working hours fill the time grid ──
+//
+// In the Day and Week views the rows are sized so VISIBLE_HOURS exactly fill
+// the visible grid on any screen. The grid opens scrolled to 07:00, or to the
+// current hour when that is earlier, so the window ends at 19:00 or earlier.
+// The other hours are still there, by scrolling.
+
+const LATEST_START_HOUR = 7;
+const VISIBLE_HOURS = 12;
+const SLOTS_PER_HOUR = 2; // FullCalendar's default 30-minute slotDuration
+const MIN_SLOT_PX = 12;
+
+function visibleStartHour() {
+  return Math.min(LATEST_START_HOUR, new Date().getHours());
+}
+
+// Where the grid scrolls to: a quarter hour above the first visible hour, so
+// that hour's label, which sits centred on its line, is not cut in half.
+function visibleScrollTime() {
+  return { minutes: Math.max(0, visibleStartHour() * 60 - 15) };
+}
+let slotMinTimeSpelling = '00:00:00';
+
+function fitWorkHours() {
+  if (!calendar || !calendar.view.type.startsWith('timeGrid')) return;
+  const root = document.getElementById('calendar');
+  const scroller = root.querySelector('.fc-timegrid-body')?.closest('.fc-scroller');
+  if (!scroller || !scroller.clientHeight) return;
+
+  // One extra slot keeps the last hour's line and label clear of the edge.
+  const slots = VISIBLE_HOURS * SLOTS_PER_HOUR + 1;
+  const px = `${Math.max(MIN_SLOT_PX, Math.floor(scroller.clientHeight / slots))}px`;
+  if (root.style.getPropertyValue('--slot-height') === px) return;
+
+  // A refit after the first (a resize, or another week's all-day row taking
+  // more room) keeps the time at the top in view rather than jumping back.
+  const oldPx = parseFloat(root.style.getPropertyValue('--slot-height'));
+  const scrollTime = oldPx
+    ? { minutes: Math.round((scroller.scrollTop / oldPx) * (60 / SLOTS_PER_HOUR)) }
+    : visibleScrollTime();
+
+  root.style.setProperty('--slot-height', px);
+  // FullCalendar only re-measures the rows when their definition changes, and
+  // neither updateSize() nor render() counts. Re-setting slotMinTime to the
+  // same time, spelled differently, does.
+  slotMinTimeSpelling = slotMinTimeSpelling === '00:00:00' ? '00:00' : '00:00:00';
+  calendar.setOption('slotMinTime', slotMinTimeSpelling);
+  calendar.scrollToTime(scrollTime);
 }
 
 // Strictly-before-today (local midnight) test shared by dayCellClassNames.
@@ -568,14 +730,17 @@ function initCalendar() {
       multiMonthYear: { buttonText: 'Year' },
       listMonth: { buttonText: 'Agenda' },
     },
-    headerToolbar: {
-      left: 'prev,next today',
-      center: 'title',
-      right: buildToolbarRight(settings.enabledViews),
+    ...toolbarsForWidth(),
+    customButtons: {
+      viewMenu: { text: 'View', hint: 'Change view', click: (ev) => toggleViewMenu(ev.currentTarget) },
+      sidebarToggle: { text: '☰', hint: 'Show sidebar', click: () => applySidebarCollapsed(false) },
     },
     allDayText: '',
     height: '100%',
-    scrollTime: '05:00:00',
+    scrollTime: visibleScrollTime(),
+    // Keep the hours in view when moving to another week or day.
+    scrollTimeReset: false,
+    windowResize: () => fitWorkHours(),
     nowIndicator: true,
     dayMaxEvents: true,
     selectable: true,
@@ -605,14 +770,44 @@ function initCalendar() {
     datesSet: (arg) => {
       syncJumpToSelectors();
       updateCompactClass(arg.view.type);
+      updateViewMenuLabel(arg.view.type);
+      updateTitleWeek(arg.view);
+      requestAnimationFrame(fitWorkHours);
       try { localStorage.setItem(LAST_VIEW_KEY, arg.view.type); } catch { /* private mode, quota, etc. */ }
       updateImportantDayCounts();
     },
     eventsSet: () => {
       updateImportantDayCounts();
+      requestAnimationFrame(fitWorkHours);
     },
   });
   calendar.render();
+
+  // The compact layout in styles.css changes font sizes without resizing the
+  // calendar, so FullCalendar would keep its old measurements and draw events
+  // off their time slots. Keep this query in step with the @media block there.
+  window.matchMedia?.('(min-width: 769px) and (max-width: 1280px), (min-width: 769px) and (max-height: 800px)')
+    .addEventListener?.('change', () => requestAnimationFrame(() => {
+      calendar.updateSize();
+      fitWorkHours();
+    }));
+
+  setupSwipe(document.getElementById('calendar'));
+
+  // FullCalendar only re-measures on window resize. The sidebar sliding open or
+  // shut, and all-day events growing the header, resize it without one.
+  let resizeFrame = 0;
+  new ResizeObserver(() => {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = requestAnimationFrame(() => {
+      calendar.updateSize();
+      fitWorkHours();
+    });
+  }).observe(document.getElementById('calendar'));
+
+  for (const query of [VIEW_MENU_QUERY, PHONE_QUERY]) {
+    window.matchMedia?.(query).addEventListener?.('change', applyToolbars);
+  }
 
   document.getElementById('open-google').addEventListener('click', () => {
     window.open(providerUrl('google'), '_blank', 'noopener');
@@ -623,6 +818,172 @@ function initCalendar() {
 }
 
 // ── Jump to year / month ──
+
+// ── Swipe to the previous or next period ──
+//
+// The calendar panel follows a sideways drag with the neighbouring period
+// already beside it, the way a phone's home screens move. As soon as a drag
+// turns sideways, the current panel is frozen into a static copy and the real
+// calendar switches to the neighbour on the side being uncovered; the two move
+// together under the finger. Let go past SWIPE_COMMIT of the width, or flick,
+// and the neighbour slides into place; otherwise both spring back and the
+// calendar returns to the original period. The ‹ › buttons run the same slide.
+// A drag that starts mostly vertical is left to scroll the day grid, and
+// FullCalendar's long-press (1 s) to move an event never moves the panel.
+
+const SWIPE_LOCK_PX = 10;      // movement before a drag counts as sideways or not
+const SWIPE_COMMIT = 0.25;     // share of the width that changes the period
+const SWIPE_FLICK_PX = 50;     // or this far, quickly
+const SWIPE_FLICK_MS = 300;
+const SLIDE_MS = 200;
+
+const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+function harnessEl() {
+  return document.querySelector('#calendar .fc-view-harness:not(.fc-peek-snapshot)');
+}
+
+// { snapshot, shown, width } while a slide is in progress. `shown` is the
+// period the real calendar shows, relative to where the slide began: -1, 0, 1.
+let peek = null;
+let sliding = false;
+
+function startPeek() {
+  const harness = harnessEl();
+  if (!harness) return false;
+  const snapshot = harness.cloneNode(true);
+  snapshot.classList.add('fc-peek-snapshot');
+  Object.assign(snapshot.style, {
+    position: 'absolute',
+    left: `${harness.offsetLeft}px`,
+    top: `${harness.offsetTop}px`,
+    width: `${harness.offsetWidth}px`,
+    height: `${harness.offsetHeight}px`,
+    zIndex: '1',
+    pointerEvents: 'none',
+  });
+  harness.parentNode.appendChild(snapshot);
+  // A copy starts unscrolled; keep the hours the user was looking at.
+  const from = harness.querySelectorAll('.fc-scroller');
+  snapshot.querySelectorAll('.fc-scroller').forEach((el, i) => {
+    el.scrollTop = from[i]?.scrollTop ?? 0;
+    el.scrollLeft = from[i]?.scrollLeft ?? 0;
+  });
+  peek = { snapshot, shown: 0, width: harness.offsetWidth };
+  return true;
+}
+
+function showPeriod(target) {
+  while (peek.shown < target) { calendar.next(); peek.shown++; }
+  while (peek.shown > target) { calendar.prev(); peek.shown--; }
+}
+
+// The frozen copy at `dx`, the live calendar beside it on the side of `shown`.
+function placePeek(dx, animate) {
+  const harness = harnessEl();
+  const transition = animate ? `transform ${SLIDE_MS}ms ease-out` : 'none';
+  for (const el of [peek.snapshot, harness]) el.style.transition = transition;
+  peek.snapshot.style.transform = `translateX(${dx}px)`;
+  harness.style.transform = `translateX(${dx + peek.shown * peek.width}px)`;
+}
+
+// Slides to the neighbour (commit) or back to where the slide began.
+function endPeek(commit) {
+  sliding = true;
+  const { snapshot, shown, width } = peek;
+  if (commit) placePeek(-shown * width, true);
+  else placePeek(0, true);
+  setTimeout(() => {
+    const harness = harnessEl();
+    if (!commit) showPeriod(0);
+    harness.style.transition = '';
+    harness.style.transform = '';
+    // Going back re-renders the original under the copy; let it settle first.
+    setTimeout(() => {
+      snapshot.remove();
+      peek = null;
+      sliding = false;
+    }, commit ? 0 : 150);
+  }, SLIDE_MS);
+}
+
+function slideTo(direction) {
+  const target = direction === 'next' ? 1 : -1;
+  if (sliding || peek) return;
+  if (reducedMotion() || !startPeek()) {
+    if (target > 0) calendar.next(); else calendar.prev();
+    return;
+  }
+  showPeriod(target);
+  placePeek(0, false);
+  void harnessEl().offsetWidth; // apply the start positions before animating
+  endPeek(true);
+}
+
+function setupSwipe(el) {
+  let start = null;
+  let mode = null; // null until SWIPE_LOCK_PX, then 'x' (ours) or 'y' (scroll)
+
+  const onMove = (ev) => {
+    if (!start) return;
+    const t = ev.touches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (!mode) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_LOCK_PX) return;
+      // An event or time selection being dragged owns this touch.
+      const fcDrag = document.querySelector('.fc-event-mirror, .fc-event-dragging');
+      mode = !fcDrag && Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      if (mode === 'x') closeViewMenu();
+    }
+    if (mode !== 'x' || reducedMotion()) return;
+    if (!peek && !startPeek()) return;
+    const want = dx < 0 ? 1 : dx > 0 ? -1 : peek.shown;
+    if (want !== peek.shown) showPeriod(want);
+    placePeek(dx, false);
+  };
+
+  const onEnd = (ev) => {
+    start?.target.removeEventListener('touchmove', onMove);
+    start?.target.removeEventListener('touchend', onEnd);
+    start?.target.removeEventListener('touchcancel', onEnd);
+    if (!start || mode !== 'x') { start = null; return; }
+    const t = ev.changedTouches[0];
+    const dx = t ? t.clientX - start.x : 0;
+    const quick = Date.now() - start.time <= SWIPE_FLICK_MS;
+    start = null;
+    const commit = ev.type === 'touchend'
+      && (Math.abs(dx) >= el.offsetWidth * SWIPE_COMMIT || (quick && Math.abs(dx) >= SWIPE_FLICK_PX));
+    if (!peek) {
+      // Reduced motion: no panel movement, just the change.
+      if (commit) { if (dx < 0) calendar.next(); else calendar.prev(); }
+      return;
+    }
+    endPeek(commit && peek.shown !== 0);
+  };
+
+  // Changing the period mid-drag re-renders the grid and detaches the element
+  // the finger started on. Touch events keep going to that element but no
+  // longer bubble up to `el`, so listen on the element itself.
+  el.addEventListener('touchstart', (ev) => {
+    if (sliding || peek || ev.touches.length !== 1) { start = null; return; }
+    const t = ev.touches[0];
+    start = { x: t.clientX, y: t.clientY, time: Date.now(), target: ev.target };
+    mode = null;
+    ev.target.addEventListener('touchmove', onMove, { passive: true });
+    ev.target.addEventListener('touchend', onEnd, { passive: true });
+    ev.target.addEventListener('touchcancel', onEnd, { passive: true });
+  }, { passive: true });
+
+  // The ‹ › buttons slide too: catch their clicks before FullCalendar does.
+  el.addEventListener('click', (ev) => {
+    const button = ev.target.closest('.fc-prev-button, .fc-next-button');
+    if (!button) return;
+    ev.stopPropagation();
+    closeViewMenu();
+    slideTo(button.classList.contains('fc-next-button') ? 'next' : 'prev');
+  }, true);
+}
 
 function setupJumpTo() {
   const monthSel = document.getElementById('jump-month');
@@ -695,7 +1056,7 @@ async function renderCalendars() {
     visibility[cal.id] = cal.visible;
 
     if ((cal.kind === 'google-sub' || cal.kind === 'caldav-sub') && cal.writeable) {
-      writeableCals.push({ id: cal.id, name: cal.name });
+      writeableCals.push({ id: cal.id, name: cal.name, accountId: cal.accountId });
     }
 
     const li = document.createElement('li');
@@ -766,11 +1127,12 @@ function calendarsByUse() {
   });
 }
 
-function populateCalendarSelector() {
+// `only` narrows the list, e.g. to the calendars a CalDAV event can move between.
+function populateCalendarSelector(only = () => true) {
   const sel = document.getElementById('ef-cal');
   if (!sel) return;
   sel.innerHTML = '';
-  for (const cal of calendarsByUse()) {
+  for (const cal of calendarsByUse().filter(only)) {
     const opt = document.createElement('option');
     opt.value = cal.id;
     opt.textContent = cal.name;
@@ -934,6 +1296,8 @@ function setupModals() {
     applyAllDayMode(document.getElementById('ef-allday').checked);
   });
   document.getElementById('ef-cal').addEventListener('change', syncGuestsField);
+  document.getElementById('ef-repeat').addEventListener('change', syncUntilField);
+  setupScopePrompt();
   document.getElementById('ef-form').addEventListener('submit', submitEventForm);
   document.getElementById('ef-delete').addEventListener('click', deleteCurrentEvent);
   setupFormKeyboardFlow();
@@ -947,7 +1311,7 @@ function setupModals() {
       closeSearch();
       closeDetail();
       closeDay();
-      closeEventForm();
+      if (!closeScopePrompt()) closeEventForm();
     }
   });
 }
@@ -979,7 +1343,7 @@ function applyAllDayMode(allDay) {
 // before leaving it, so Tab is handled here for the two date fields. Reaching a
 // date field from the keyboard also opens the native picker.
 function setupFormKeyboardFlow() {
-  const order = ['ef-title', 'ef-allday', 'ef-start', 'ef-end', 'ef-cal', 'ef-guests', 'ef-loc', 'ef-desc'];
+  const order = ['ef-title', 'ef-allday', 'ef-start', 'ef-end', 'ef-repeat', 'ef-until', 'ef-cal', 'ef-guests', 'ef-loc', 'ef-desc'];
   let viaKeyboard = false;
   document.addEventListener('keydown', (e) => { if (e.key === 'Tab') viaKeyboard = true; }, true);
   document.addEventListener('mousedown', () => { viaKeyboard = false; }, true);
@@ -991,7 +1355,7 @@ function setupFormKeyboardFlow() {
       i += back ? -1 : 1;
       if (i < 0 || i >= order.length) return null;
       const el = document.getElementById(order[i]);
-      if (el && !el.disabled) return el;
+      if (el && !el.disabled && el.offsetParent !== null) return el;
     }
   };
 
@@ -1038,6 +1402,11 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
   descInput.value  = '';
   guestInput.value = '';
   editingGuestsKnown = !isEdit;
+  editingOccurrence = isEdit && event.extendedProps.recurring
+    ? { seriesId: event.extendedProps.seriesId, occurrenceStart: event.extendedProps.occurrenceStart }
+    : null;
+  showRepeat({ repeat: 'none', repeatUntil: null });
+  if (isEdit) loadRepeat(event);
 
   if (isEdit) {
     const isCaldav = event.extendedProps.calId?.startsWith('cdav_');
@@ -1068,8 +1437,16 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
         ? toDatetimeLocal(event.end)
         : toDatetimeLocal(new Date(event.start.getTime() + 3600000));
     }
+    // A CalDAV event can move to any other calendar of its account (the server
+    // MOVEs it); Google events stay where they are.
+    if (isCaldav) {
+      const accountId = writeableCals.find((c) => c.id === editingCalId)?.accountId;
+      populateCalendarSelector((c) => c.id.startsWith('cdav_') && c.accountId === accountId);
+    } else {
+      populateCalendarSelector();
+    }
     calSel.value    = editingCalId;
-    calSel.disabled = true;
+    calSel.disabled = !isCaldav || calSel.options.length < 2;
   } else {
     editingEventId = null;
     editingCalId   = null;
@@ -1091,6 +1468,7 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
         ? toDatetimeLocal(end)
         : (start ? toDatetimeLocal(new Date(start.getTime() + 3600000)) : '');
     }
+    populateCalendarSelector();
     calSel.disabled = false;
     if (calSel.options.length > 0) calSel.selectedIndex = 0;
   }
@@ -1119,6 +1497,107 @@ function closeEventForm() {
   document.getElementById('event-form-modal').classList.add('hidden');
   editingEventId = null;
   editingCalId   = null;
+  editingOccurrence = null;
+}
+
+// ── Repeat ──
+
+function syncUntilField() {
+  const repeat = document.getElementById('ef-repeat').value;
+  document.getElementById('ef-until-field').classList.toggle('hidden', repeat === 'none' || repeat === 'custom');
+}
+
+// Puts a repeat into the form and remembers it as the starting point.
+function showRepeat({ repeat, repeatUntil }) {
+  editingRepeat = { repeat, repeatUntil: repeatUntil || null };
+  const select = document.getElementById('ef-repeat');
+  select.querySelector('option[value="custom"]').hidden = repeat !== 'custom';
+  select.value = repeat;
+  document.getElementById('ef-until').value = repeatUntil || '';
+  syncUntilField();
+}
+
+// CalDAV occurrences carry their series' repeat; Google lists occurrences
+// without it, so it is fetched from the series.
+async function loadRepeat(event) {
+  const p = event.extendedProps;
+  if (!p.recurring) return;
+  if (!p.calId.startsWith('gcal_')) {
+    showRepeat({ repeat: p.repeat || 'custom', repeatUntil: p.repeatUntil });
+    return;
+  }
+  const select = document.getElementById('ef-repeat');
+  select.disabled = true;
+  try {
+    const params = new URLSearchParams({ calId: p.calId, timeZone: userTimeZone() });
+    const res = await fetch(`/api/google/series/${encodeURIComponent(p.seriesId)}?${params}`);
+    const data = await res.json();
+    // The form may have moved on to another event while this was loading.
+    if (res.ok && editingOccurrence?.seriesId === p.seriesId) showRepeat(data);
+    else if (!res.ok) showRepeat({ repeat: 'custom', repeatUntil: null });
+  } catch {
+    showRepeat({ repeat: 'custom', repeatUntil: null });
+  } finally {
+    select.disabled = false;
+  }
+}
+
+function userTimeZone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+// The form's repeat for a request body: sent only when it changed, so an
+// edit that leaves it alone does not rewrite the series' own rule.
+function repeatBody() {
+  const repeat = document.getElementById('ef-repeat').value;
+  const repeatUntil = repeat === 'none' ? null : (document.getElementById('ef-until').value || null);
+  const changed = repeat !== editingRepeat.repeat || repeatUntil !== editingRepeat.repeatUntil;
+  return { changed, fields: changed ? { repeat, repeatUntil } : {} };
+}
+
+// ── "This event / All events" prompt ──
+
+let scopeResolve = null;
+
+function setupScopePrompt() {
+  const finish = (scope) => () => {
+    document.getElementById('scope-modal').classList.add('hidden');
+    const resolve = scopeResolve;
+    scopeResolve = null;
+    resolve?.(scope);
+  };
+  document.getElementById('scope-this').onclick = finish('this');
+  document.getElementById('scope-all').onclick = finish('all');
+  document.getElementById('scope-cancel').onclick = finish(null);
+  const overlay = document.getElementById('scope-modal');
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null)(); });
+}
+
+// Closes the prompt as a cancel; true when it was open.
+function closeScopePrompt() {
+  if (!scopeResolve) return false;
+  document.getElementById('scope-cancel').click();
+  return true;
+}
+
+// Asks whether a change applies to one occurrence or the whole series.
+// Resolves 'this', 'all', or null when cancelled. `onlyAllReason`, when set,
+// rules out "This event" and says why.
+function askScope(heading, onlyAllReason = null) {
+  document.getElementById('scope-heading').textContent = heading;
+  const thisBtn = document.getElementById('scope-this');
+  thisBtn.disabled = Boolean(onlyAllReason);
+  const hint = document.getElementById('scope-hint');
+  hint.textContent = onlyAllReason || '';
+  hint.classList.toggle('hidden', !onlyAllReason);
+  document.getElementById('scope-modal').classList.remove('hidden');
+  (onlyAllReason ? document.getElementById('scope-all') : thisBtn).focus();
+  return new Promise((resolve) => { scopeResolve = resolve; });
+}
+
+// Request fields naming the occurrence and the chosen scope.
+function scopeBody(scope, occurrence) {
+  return { scope, occurrenceStart: occurrence.occurrenceStart, seriesId: occurrence.seriesId };
 }
 
 async function submitEventForm(e) {
@@ -1129,7 +1608,8 @@ async function submitEventForm(e) {
   const allDay     = document.getElementById('ef-allday').checked;
   const startInput = document.getElementById('ef-start');
   const endInput   = document.getElementById('ef-end');
-  const calId      = editingCalId || document.getElementById('ef-cal').value;
+  const calSelValue = document.getElementById('ef-cal').value;
+  const calId      = editingCalId?.startsWith('cdav_') ? calSelValue : (editingCalId || calSelValue);
 
   let start, end;
   if (allDay) {
@@ -1151,6 +1631,23 @@ async function submitEventForm(e) {
   };
 
   const isCaldav = calId.startsWith('cdav_');
+  if (isCaldav && editingEventId) body.fromCalId = editingCalId;
+
+  body.timeZone = userTimeZone();
+  const { changed: repeatChanged, fields: repeatFields } = repeatBody();
+  Object.assign(body, repeatFields);
+  const occurrence = editingOccurrence;
+  if (occurrence) {
+    const reason = repeatChanged ? 'A new repeat applies to the whole series.'
+      : (isCaldav && calId !== editingCalId) ? 'Only the whole series can move to another calendar.'
+      : null;
+    const scope = await askScope('Save repeating event', reason);
+    if (!scope) { btn.disabled = false; return; }
+    Object.assign(body, scopeBody(scope, occurrence));
+  }
+  // A series changes many events at once; reload them all rather than
+  // patching the one cached copy.
+  const reloadAll = Boolean(occurrence) || (body.repeat && body.repeat !== 'none');
 
   // Send the guest list only when it is meaningful: leaving the key out tells
   // the server to keep whatever guests the event already has.
@@ -1193,6 +1690,11 @@ async function submitEventForm(e) {
     if (!res.ok) { showBanner(data.error || 'Failed to save event'); return; }
 
     if (!editingEventId) recordCalPick(calId);
+    if (reloadAll) {
+      closeEventForm();
+      await syncNow();
+      return;
+    }
     if (editingEventId) removeFromCache(isCaldav ? `cdav-${editingEventId}` : `g-${editingEventId}`);
     if (data.event) insertIntoCache(data.event);
     closeEventForm();
@@ -1236,6 +1738,16 @@ async function handleEventChange(info) {
     description: ev.extendedProps.description || '',
   };
 
+  body.timeZone = userTimeZone();
+  const occurrence = ev.extendedProps.recurring
+    ? { seriesId: ev.extendedProps.seriesId, occurrenceStart: ev.extendedProps.occurrenceStart }
+    : null;
+  if (occurrence) {
+    const scope = await askScope('Move repeating event');
+    if (!scope) { info.revert(); return; }
+    Object.assign(body, scopeBody(scope, occurrence));
+  }
+
   const url = isCaldav
     ? `/api/caldav/events/${encodeURIComponent(eventId)}`
     : `/api/google/events/${encodeURIComponent(eventId)}`;
@@ -1248,6 +1760,7 @@ async function handleEventChange(info) {
     });
     const data = await res.json();
     if (!res.ok) { showBanner(data.error || 'Failed to update event'); info.revert(); return; }
+    if (occurrence) { await syncNow(); return; }
 
     removeFromCache(isCaldav ? `cdav-${eventId}` : `g-${eventId}`);
     if (data.event) insertIntoCache(data.event);
@@ -1261,7 +1774,14 @@ async function handleEventChange(info) {
 
 async function deleteCurrentEvent() {
   const title = document.getElementById('ef-title').value || 'this event';
-  if (!confirm(`Delete "${title}"?`)) return;
+  const occurrence = editingOccurrence;
+  let scope = null;
+  if (occurrence) {
+    scope = await askScope(`Delete "${title}"`);
+    if (!scope) return;
+  } else if (!confirm(`Delete "${title}"?`)) {
+    return;
+  }
 
   const btn = document.getElementById('ef-delete');
   btn.disabled = true;
@@ -1269,18 +1789,28 @@ async function deleteCurrentEvent() {
   try {
     let res;
     if (isCaldavDel) {
-      res = await fetch(
-        `/api/caldav/events/${encodeURIComponent(editingEventId)}?calId=${encodeURIComponent(editingCalId)}`,
-        { method: 'DELETE' }
-      );
+      const params = new URLSearchParams({ calId: editingCalId });
+      if (scope === 'this') {
+        params.set('scope', 'this');
+        params.set('occurrenceStart', occurrence.occurrenceStart);
+        params.set('timeZone', userTimeZone());
+      }
+      res = await fetch(`/api/caldav/events/${encodeURIComponent(editingEventId)}?${params}`, { method: 'DELETE' });
     } else {
+      // Google deletes one occurrence by its own id, the series by the series id.
+      const id = scope === 'all' ? occurrence.seriesId : editingEventId;
       res = await fetch(
-        `/api/google/events/${encodeURIComponent(editingEventId)}?calId=${encodeURIComponent(editingCalId)}`,
+        `/api/google/events/${encodeURIComponent(id)}?calId=${encodeURIComponent(editingCalId)}`,
         { method: 'DELETE' }
       );
     }
     const data = await res.json();
     if (!res.ok) { showBanner(data.error || 'Failed to delete event'); return; }
+    if (occurrence) {
+      closeEventForm();
+      await syncNow();
+      return;
+    }
 
     removeFromCache(isCaldavDel ? `cdav-${editingEventId}` : `g-${editingEventId}`);
     closeEventForm();
@@ -1354,8 +1884,10 @@ function openModal(event) {
   document.getElementById('modal-title').textContent = event.title;
   document.getElementById('modal-cal').innerHTML =
     `<span class="swatch" style="background:${color}"></span> ${esc(p.source || '')}`;
-  document.getElementById('modal-time').textContent = formatEventTime(event);
+  document.getElementById('modal-time').textContent =
+    formatEventTime(event) + (p.recurring ? ' · ↻ repeats' : '');
 
+  renderNearby(event);
   renderLocation(document.getElementById('modal-location'), p.location);
   renderGuests(document.getElementById('modal-guests'), p.attendees);
   renderDescription(document.getElementById('modal-description'), p.description);
@@ -1375,6 +1907,70 @@ function openModal(event) {
   updateImportantButton();
 
   document.getElementById('event-modal').classList.remove('hidden');
+}
+
+// ── Nearby events in the detail modal ──
+//
+// Overlapping or back-to-back events are thin targets, on a phone especially,
+// so a tap often opens a neighbour of the one meant. The modal lists the
+// events that overlap the open one, or sit within NEARBY_GAP_MS of it, as
+// chips; tapping one shows that event instead.
+
+const NEARBY_GAP_MS = 30 * 60 * 1000;
+const NEARBY_MAX = 8;
+const DAY_MS = 86400000;
+
+function nearbyEvents(event) {
+  if (!event.start) return [];
+  const span = (e) => {
+    const start = e.start.getTime();
+    const end = e.end ? e.end.getTime() : start + (e.allDay ? DAY_MS : 0);
+    return [start, end];
+  };
+  const [start, end] = span(event);
+  const gap = event.allDay ? 0 : NEARBY_GAP_MS;
+  const seen = new Set([event.id]);
+  const found = [];
+  for (const other of [...(calendar?.getEvents() ?? []), ...(dayCal?.getEvents() ?? [])]) {
+    if (seen.has(other.id) || !other.start || other.display === 'none') continue;
+    seen.add(other.id);
+    if (other.allDay !== Boolean(event.allDay)) continue;
+    const [oStart, oEnd] = span(other);
+    if (oStart < end + gap && oEnd > start - gap) found.push(other);
+  }
+  return found.sort((a, b) => a.start - b.start).slice(0, NEARBY_MAX);
+}
+
+function renderNearby(event) {
+  const box = document.getElementById('modal-nearby');
+  const list = nearbyEvents(event);
+  box.replaceChildren();
+  box.classList.toggle('hidden', list.length === 0);
+  if (!list.length) return;
+  const label = document.createElement('span');
+  label.className = 'modal-nearby-label';
+  label.textContent = list.length === 1 ? 'Also here' : `Also here (${list.length})`;
+  box.appendChild(label);
+  for (const other of list) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'nearby-chip';
+    const dot = document.createElement('span');
+    dot.className = 'nearby-dot';
+    dot.style.background = other.backgroundColor || other.extendedProps?.color || '#666';
+    chip.appendChild(dot);
+    if (!other.allDay) {
+      const time = document.createElement('time');
+      time.textContent = other.start.toLocaleTimeString([], timeFmt());
+      chip.appendChild(time);
+    }
+    const title = document.createElement('span');
+    title.className = 'nearby-title';
+    title.textContent = other.title || '(no title)';
+    chip.appendChild(title);
+    chip.addEventListener('click', () => openModal(other));
+    box.appendChild(chip);
+  }
 }
 
 // ── Manual important flag ──

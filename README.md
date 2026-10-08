@@ -68,7 +68,7 @@ The app is fully usable on a smartphone:
 
 The app is also installable as a **Progressive Web App (PWA)**:
 
-- On Android (Chrome): tap the browser menu → *Add to Home Screen*.
+- On Android (Chrome): tap the browser menu → *Install app* (or *Add to Home Screen*).
 - On iOS (Safari): tap Share → *Add to Home Screen*.
 
 Once installed, the app shell (HTML, CSS, JS, and FullCalendar) is cached by
@@ -77,6 +77,20 @@ Events from the last sync are available offline via the client-side cache.
 
 To force-refresh cached assets after an app update, bump `CACHE_NAME` in
 `public/sw.js` from `cal-v1` to `cal-v2` (or any new value).
+
+### Reminders
+
+**⚙ Settings → Reminders** turns on push notifications for the device you are
+on: a reminder a set time before each event, and one at a set hour for all-day
+events, with a switch per calendar. The server sends them, so they arrive while
+the app is closed, on phones (installed app) and desktop browsers alike — a
+desktop browser has to be running to receive them. Turn them on once per device.
+
+The server keeps its push key pair, the subscribed devices and hashes of the
+reminders already sent in `data/push.json` (mode `0600`). Each reminder carries
+the event's title, time and location; it is encrypted for the device, so the
+browser's push service (Google's, for Chrome) relays it without being able to
+read it.
 
 ---
 

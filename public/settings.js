@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAccounts();
   loadIcsFeeds();
   loadCaldavAccounts();
+  setupReminders();
 
   // Preferences auto-save on change.
   document.getElementById('firstDay').addEventListener('change', saveSettings);
@@ -141,6 +142,164 @@ async function saveSettings() {
   note.textContent = '✓ Saved';
   clearTimeout(note._t);
   note._t = setTimeout(() => (note.textContent = ''), 1500);
+}
+
+// ── Reminders ──
+
+let reminderSettings = null;
+
+async function setupReminders() {
+  const s = await fetch('/api/settings').then((r) => r.json());
+  reminderSettings = s.reminders || { minutesBefore: 10, allDayHour: 8, mutedCalendars: [] };
+  document.getElementById('reminderLead').value = String(reminderSettings.minutesBefore);
+  document.getElementById('reminderAllDay').value =
+    reminderSettings.allDayHour == null ? 'off' : String(reminderSettings.allDayHour);
+  document.getElementById('reminderLead').addEventListener('change', saveReminders);
+  document.getElementById('reminderAllDay').addEventListener('change', saveReminders);
+
+  const { calendars } = await fetch('/api/calendars').then((r) => r.json());
+  const muted = new Set(reminderSettings.mutedCalendars || []);
+  const box = document.getElementById('reminder-cals');
+  box.innerHTML = '';
+  for (const cal of calendars) {
+    const row = document.createElement('div');
+    row.className = 'field row';
+    const id = `remind-${cal.id}`;
+    row.innerHTML = `
+      <label for="${esc(id)}"><span class="swatch" style="background:${esc(cal.color)};display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px"></span>${esc(cal.name)}</label>
+      <input type="checkbox" class="remind-check" id="${esc(id)}" data-cal-id="${esc(cal.id)}" ${muted.has(cal.id) ? '' : 'checked'} />`;
+    row.querySelector('input').addEventListener('change', saveReminders);
+    box.appendChild(row);
+  }
+
+  document.getElementById('push-toggle').addEventListener('click', togglePush);
+  document.getElementById('push-test').addEventListener('click', testPush);
+  refreshPushState();
+}
+
+async function saveReminders() {
+  const allDay = document.getElementById('reminderAllDay').value;
+  reminderSettings = {
+    minutesBefore: Number(document.getElementById('reminderLead').value),
+    allDayHour: allDay === 'off' ? null : Number(allDay),
+    mutedCalendars: [...document.querySelectorAll('.remind-check:not(:checked)')].map((c) => c.dataset.calId),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+  await fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reminders: reminderSettings }),
+  });
+  const note = document.getElementById('reminder-saved-note');
+  note.textContent = '✓ Saved';
+  clearTimeout(note._t);
+  note._t = setTimeout(() => (note.textContent = ''), 1500);
+}
+
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+async function pushRegistration() {
+  await navigator.serviceWorker.register('/sw.js');
+  return navigator.serviceWorker.ready;
+}
+
+async function currentSubscription() {
+  if (!pushSupported()) return null;
+  return (await pushRegistration()).pushManager.getSubscription();
+}
+
+async function refreshPushState() {
+  const status = document.getElementById('push-status');
+  const toggle = document.getElementById('push-toggle');
+  const test = document.getElementById('push-test');
+  if (!pushSupported()) {
+    status.textContent = 'This browser cannot receive notifications';
+    toggle.classList.add('hidden');
+    return;
+  }
+  const sub = await currentSubscription();
+  // Re-send this device's subscription: harmless when the server has it, and restores it when not.
+  if (sub) {
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub.toJSON(), label: deviceLabel() }),
+    });
+  }
+  const { devices } = await fetch('/api/push').then((r) => r.json());
+  const others = devices - (sub ? 1 : 0);
+  const elsewhere = others > 0 ? ` (on for ${others} other device${others === 1 ? '' : 's'})` : '';
+  if (Notification.permission === 'denied') {
+    status.textContent = `This device: blocked in browser settings${elsewhere}`;
+    toggle.classList.add('hidden');
+  } else {
+    status.textContent = `This device: ${sub ? 'on' : 'off'}${elsewhere}`;
+    toggle.classList.remove('hidden');
+  }
+  toggle.textContent = sub ? 'Turn off' : 'Turn on';
+  test.classList.toggle('hidden', !sub);
+}
+
+// The server's public key arrives base64url-encoded; subscribe() wants the raw bytes.
+function keyBytes(base64url) {
+  const b64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+function deviceLabel() {
+  const ua = navigator.userAgent;
+  const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac/.test(ua) ? 'Mac'
+    : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'Device';
+  const browser = /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
+  return [os, browser].filter(Boolean).join(' · ');
+}
+
+async function togglePush() {
+  const toggle = document.getElementById('push-toggle');
+  toggle.disabled = true;
+  try {
+    const reg = await pushRegistration();
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      await fetch('/api/push/unsubscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: existing.endpoint }),
+      });
+      await existing.unsubscribe();
+    } else {
+      if ((await Notification.requestPermission()) !== 'granted') return;
+      const { publicKey } = await fetch('/api/push').then((r) => r.json());
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
+      const res = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: sub.toJSON(), label: deviceLabel() }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Subscribing failed');
+      // Reminders are timed in this device's zone; save it with the current choices.
+      await saveReminders();
+    }
+  } catch (err) {
+    showBanner(`Notifications: ${err.message || err}`);
+  } finally {
+    toggle.disabled = false;
+    refreshPushState();
+  }
+}
+
+async function testPush() {
+  const sub = await currentSubscription();
+  if (!sub) return;
+  const res = await fetch('/api/push/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint: sub.endpoint }),
+  });
+  if (!res.ok) showBanner((await res.json()).error || 'Test failed');
 }
 
 // ── Accounts ──

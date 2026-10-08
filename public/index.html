@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Unified Calendar</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
-  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#ffffff">
   <script>
@@ -17,6 +17,14 @@
         ? stored
         : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       document.documentElement.dataset.theme = resolved;
+
+      // Colour Android's status and navigation bars to match the page: the
+      // theme-color tag follows data-theme, however and whenever it changes.
+      var bars = { light: '#ffffff', dark: '#1e2128' };
+      var meta = document.querySelector('meta[name="theme-color"]');
+      function paintBars() { meta.content = bars[document.documentElement.dataset.theme] || bars.light; }
+      paintBars();
+      new MutationObserver(paintBars).observe(document.documentElement, { attributeFilter: ['data-theme'] });
     })();
   </script>
   <link rel="stylesheet" href="/styles.css" />
@@ -31,10 +39,8 @@
   <div class="layout">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle calendars sidebar">☰</button>
+        <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar" title="Hide sidebar">☰</button>
         <h1 class="sidebar-brand">📅 Unified Calendar</h1>
-        <button class="sidebar-rail-toggle" id="sidebar-rail-toggle" aria-label="Hide sidebar" title="Hide sidebar">«</button>
-        <button class="sidebar-close" id="sidebar-close" aria-label="Close sidebar">✕</button>
       </div>
 
       <div class="sidebar-status">
@@ -76,8 +82,6 @@
       </div>
     </aside>
 
-      <!-- Only control left on screen once the sidebar is fully hidden. -->
-      <button class="sidebar-restore" id="sidebar-restore" aria-label="Show sidebar" title="Show sidebar">»</button>
     <main>
       <div id="calendar"></div>
     </main>
@@ -88,6 +92,7 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
       <h3 id="modal-title"></h3>
+      <div class="modal-nearby hidden" id="modal-nearby"></div>
       <div class="modal-row" id="modal-cal"></div>
       <div class="modal-row" id="modal-time"></div>
       <div class="modal-row" id="modal-location"></div>
@@ -131,6 +136,21 @@
           <input type="datetime-local" id="ef-end" />
         </div>
         <div class="form-field">
+          <label for="ef-repeat">Repeat</label>
+          <select id="ef-repeat">
+            <option value="none">Does not repeat</option>
+            <option value="weekly">Every week</option>
+            <option value="monthly">Every month</option>
+            <option value="yearly">Every year</option>
+            <option value="custom" hidden>Custom (kept as is)</option>
+          </select>
+        </div>
+        <div class="form-field hidden" id="ef-until-field">
+          <label for="ef-until">Until</label>
+          <input type="date" id="ef-until" />
+          <small class="field-hint">Leave empty to repeat with no end.</small>
+        </div>
+        <div class="form-field">
           <label for="ef-cal">Calendar</label>
           <select id="ef-cal"></select>
         </div>
@@ -158,6 +178,19 @@
     </div>
   </div>
 
+  <!-- Repeating event: apply a change to one occurrence or the whole series -->
+  <div id="scope-modal" class="modal-overlay hidden">
+    <div class="modal scope-box" role="dialog" aria-modal="true" aria-labelledby="scope-heading">
+      <h3 id="scope-heading">Edit repeating event</h3>
+      <div class="scope-actions">
+        <button type="button" id="scope-this">This event</button>
+        <button type="button" id="scope-all" class="primary">All events</button>
+        <button type="button" id="scope-cancel">Cancel</button>
+      </div>
+      <small class="field-hint hidden" id="scope-hint"></small>
+    </div>
+  </div>
+
   <!-- Search modal -->
   <div id="search-modal" class="modal-overlay hidden">
     <div class="search-box">
@@ -170,6 +203,18 @@
   <script src="/app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
+      // A new deploy installs a new worker, which drops the old cache and takes
+      // over this page; reload once so the new version shows now rather than on
+      // the next launch. Not on the first install (no previous worker), and not
+      // while a dialog is open, where a reload would lose what was typed.
+      const hadWorker = Boolean(navigator.serviceWorker.controller);
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadWorker || reloading) return;
+        if (document.querySelector('.modal-overlay:not(.hidden)')) return;
+        reloading = true;
+        location.reload();
+      });
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
   </script>

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Settings · Unified Calendar</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
+  <meta name="theme-color" content="#ffffff">
   <script>
     // Resolve and apply the theme before first paint, to avoid a flash of the
     // wrong theme. Reconciled against the server value once settings load.
@@ -14,6 +15,14 @@
         ? stored
         : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       document.documentElement.dataset.theme = resolved;
+
+      // Colour Android's status and navigation bars to match the page: the
+      // theme-color tag follows data-theme, however and whenever it changes.
+      var bars = { light: '#ffffff', dark: '#1e2128' };
+      var meta = document.querySelector('meta[name="theme-color"]');
+      function paintBars() { meta.content = bars[document.documentElement.dataset.theme] || bars.light; }
+      paintBars();
+      new MutationObserver(paintBars).observe(document.documentElement, { attributeFilter: ['data-theme'] });
     })();
   </script>
   <link rel="stylesheet" href="/styles.css" />
@@ -146,6 +155,43 @@
       </div>
       <p class="view-error hint" id="view-error"></p>
       <p class="saved-note" id="view-saved-note"></p>
+    </section>
+
+    <!-- Reminders (web push) -->
+    <section class="card" id="reminders-card">
+      <h2>Reminders</h2>
+      <p class="hint">Notifications before your events, sent by the server even when the app is closed. Turn them on for each device you want them on.</p>
+      <div class="field row">
+        <label id="push-status">This device: off</label>
+        <span>
+          <button type="button" id="push-test" class="hidden">Test</button>
+          <button type="button" id="push-toggle">Turn on</button>
+        </span>
+      </div>
+      <div class="field">
+        <label for="reminderLead">Remind me</label>
+        <select id="reminderLead">
+          <option value="0">At the start</option>
+          <option value="5">5 minutes before</option>
+          <option value="10">10 minutes before</option>
+          <option value="15">15 minutes before</option>
+          <option value="30">30 minutes before</option>
+          <option value="60">1 hour before</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="reminderAllDay">All-day events</label>
+        <select id="reminderAllDay">
+          <option value="off">No reminder</option>
+          <option value="6">At 6:00</option>
+          <option value="7">At 7:00</option>
+          <option value="8">At 8:00</option>
+          <option value="9">At 9:00</option>
+        </select>
+      </div>
+      <p class="hint" style="margin-top:12px">Calendars that send reminders:</p>
+      <div id="reminder-cals"></div>
+      <p class="saved-note" id="reminder-saved-note"></p>
     </section>
 
     <!-- Account logins -->

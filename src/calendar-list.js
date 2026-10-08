@@ -56,6 +56,7 @@ export function listCalendars(sessionLike) {
       calendars.push({
         id: cal.id,
         kind: 'caldav-sub',
+        accountId: account.id,
         name: cal.name,
         color: cal.color || '#0891b2',
         visible: cal.visible !== false,

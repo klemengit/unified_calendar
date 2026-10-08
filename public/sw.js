@@ -1,5 +1,5 @@
 // Bump CACHE_NAME to invalidate all cached assets after an app update.
-const CACHE_NAME = 'cal-v8';
+const CACHE_NAME = 'cal-v25';
 
 self.addEventListener('install', () => self.skipWaiting());
 
@@ -41,5 +41,30 @@ self.addEventListener('fetch', e => {
         return cached || networkFetch;
       })
     )
+  );
+});
+
+// Reminders pushed by the server (src/reminders.js): { title, body, tag, url }.
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch { data = { body: e.data?.text() }; }
+  e.waitUntil(self.registration.showNotification(data.title || 'Unified Calendar', {
+    body: data.body || '',
+    tag: data.tag,
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    data: { url: data.url || '/' },
+  }));
+});
+
+// Tapping a notification brings the app forward, opening it if it is not running.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = e.notification.data?.url || '/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      const open = list.find(c => new URL(c.url).origin === self.location.origin);
+      return open ? open.focus() : self.clients.openWindow(url);
+    })
   );
 });
