@@ -50,7 +50,12 @@ import {
   hydrateCaldavPassword,
   DATA_DIR,
 } from './src/store.js';
-import { migratePlaintextPasswords, hydrateKeyringPasswords } from './src/secrets.js';
+import {
+  migratePlaintextPasswords,
+  hydrateKeyringPasswords,
+  deletePassword,
+  secretToolAvailable,
+} from './src/secrets.js';
 import {
   discoverCalendars,
   createCalDavEvent,
@@ -95,9 +100,14 @@ loadSettings();
 // plaintext copy after reading the keyring copy back intact, and hydration then puts the password
 // back in memory — so every CalDAV call site below keeps reading `account.password` unchanged,
 // while the store makes sure that value never reaches disk again. With no keyring on the machine
-// both steps no-op and the plaintext password keeps working.
-await migratePlaintextPasswords({ getCaldavAccounts, clearCaldavPassword });
-await hydrateKeyringPasswords({ getCaldavAccounts, hydrateCaldavPassword });
+// both steps are skipped and the plaintext password keeps working. Also run after an account is
+// added, so its password does not wait in settings.json for the next restart.
+async function moveCaldavPasswordsToKeyring() {
+  if (!secretToolAvailable()) return;
+  await migratePlaintextPasswords({ getCaldavAccounts, clearCaldavPassword });
+  await hydrateKeyringPasswords({ getCaldavAccounts, hydrateCaldavPassword });
+}
+await moveCaldavPasswordsToKeyring();
 
 const ICS_PALETTE = ['#9333ea', '#ea580c', '#0891b2', '#db2777', '#ca8a04'];
 
@@ -657,14 +667,17 @@ app.post('/api/caldav/accounts', async (req, res) => {
       visible: true,
     }));
     setCaldavCalendars(account.id, calendars);
+    await moveCaldavPasswordsToKeyring();
     res.status(201).json({ account: publicCaldavAccount(getCaldavAccount(account.id)) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete('/api/caldav/accounts/:id', (req, res) => {
+app.delete('/api/caldav/accounts/:id', async (req, res) => {
+  const account = getCaldavAccount(req.params.id);
   removeCaldavAccount(req.params.id);
+  if (account && secretToolAvailable()) await deletePassword(account.id, account.username);
   res.json({ ok: true });
 });
 
