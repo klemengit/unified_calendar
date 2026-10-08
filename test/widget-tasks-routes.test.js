@@ -651,3 +651,32 @@ test('GET /api/widget/tasks: any other refresh value leaves the cache alone', as
     await app.close();
   }
 });
+
+test('POST /api/widget/tasks: due dates count from the caller\'s `today`, not the server clock', async () => {
+  let created = null;
+  const deps = makeTasksDeps({
+    createCalDavTask: async (account, list, fields) => {
+      created = fields;
+      return makeTask({ title: fields.title, due: fields.due });
+    },
+  });
+  deps.now = () => new Date('2026-10-07T23:30:00Z'); // still the 7th on a UTC server
+  const app = await startWidgetTestApp(deps);
+  try {
+    const { res } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'pay rent due:today', today: '2026-10-08' });
+    assert.equal(res.status, 201);
+    assert.equal(created.due, '2026-10-08');
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/widget/tasks: a malformed `today` is a 400', async () => {
+  const app = await startWidgetTestApp(makeTasksDeps());
+  try {
+    const { res } = await postJson(app.baseUrl, '/api/widget/tasks', { text: 'x', today: 'tomorrow' });
+    assert.equal(res.status, 400);
+  } finally {
+    await app.close();
+  }
+});

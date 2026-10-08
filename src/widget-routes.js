@@ -35,12 +35,15 @@ export function importantBodyError(body) {
 // Validates a POST /api/widget/tasks body — mirrors importantBodyError's shape and is exported for
 // the same reason: a future web-app quick-add route can share it.
 export function addTaskBodyError(body) {
-  const { text, listId } = body && typeof body === 'object' ? body : {};
+  const { text, listId, today } = body && typeof body === 'object' ? body : {};
   if (typeof text !== 'string' || text.length < 1 || text.length > MAX_TASK_TEXT_LEN) {
     return `text must be a string of 1-${MAX_TASK_TEXT_LEN} characters`;
   }
   if (listId !== undefined && (typeof listId !== 'string' || listId.length < 1)) {
     return 'listId must be a non-empty string';
+  }
+  if (today !== undefined && (typeof today !== 'string' || !DATE_RE.test(today))) {
+    return 'today must be a YYYY-MM-DD date';
   }
   return null;
 }
@@ -323,7 +326,10 @@ export function registerWidgetRoutes(app, deps) {
       const now = deps.now();
       let parsed;
       try {
-        parsed = parseQuickAdd(body.text, { now });
+        // `today` is the caller's own date. The server's clock zone can differ (the VPS runs in
+        // UTC), and due:today typed just after midnight must not land on yesterday.
+        const [y, m, d] = (body.today || '').split('-').map(Number);
+        parsed = parseQuickAdd(body.text, { now: body.today ? new Date(y, m - 1, d, 12) : now });
       } catch (err) {
         // Throws on an empty title (e.g. whitespace-only text) or two +list tokens — a 400, not a 500.
         return res.status(400).json({ error: err.message });
