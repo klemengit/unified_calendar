@@ -500,6 +500,7 @@ export async function fetchCalDavTasks(account, list) {
         if (!comp || comp.type !== 'VTODO') continue;
         tasks.push(normalizeVtodo(comp, {
           listId: list.id, listName: list.name, listUrl: list.url, accountId: account.id, etag,
+          href: resolveUrl(list.url, r.href),
         }));
       }
     } catch { /* one malformed VTODO must not fail the whole fetch */ }
@@ -531,36 +532,64 @@ export async function createCalDavTask(account, list, fields) {
   const etag = resp.headers?.etag != null ? String(resp.headers.etag) : null;
   return normalizeVtodo(vtodoFromIcal(icalText), {
     listId: list.id, listName: list.name, listUrl: list.url, accountId: account.id, etag,
+    href: eventUrl(list.url, uid),
   });
 }
 
+// Flip a task's completion state by editing its stored file in place, so
+// properties this app does not model (alarms, repeat rules, subtasks, X-
+// properties, the original time zones) survive the edit. Only STATUS,
+// PERCENT-COMPLETE, COMPLETED and the timestamps change.
 export async function updateCalDavTask(account, list, task, fields) {
-  const headers = {
-    Authorization: basicAuth(account.username, account.password),
-    'Content-Type': 'text/calendar; charset=utf-8',
-  };
-  // Sent back exactly as stored — see the verbatim-etag note in fetchCalDavTasks. Omitted (PUT
-  // unconditional) when we never had one to begin with.
-  if (task.etag != null) headers['If-Match'] = task.etag;
+  const url = task.href || eventUrl(list.url, encodeURIComponent(task.uid));
+  const auth = basicAuth(account.username, account.password);
 
-  const icalText = buildVtodoIcal(task.uid, fields);
-  const resp = await requestFn({
-    method: 'PUT',
-    url: eventUrl(list.url, task.uid),
-    data: icalText,
-    headers,
+  const got = await requestFn({
+    method: 'GET',
+    url,
+    headers: { Authorization: auth },
+    responseType: 'text',
+    transformResponse: (d) => d,
     validateStatus: () => true,
   });
+  if (got.status === 404) {
+    throw new Error('CalDAV PUT failed: task was changed on the server since it was last fetched (404 Not Found)');
+  }
+  if (got.status < 200 || got.status >= 300) throw new Error(`CalDAV GET failed: ${got.status}`);
+
+  const icalText = setVtodoCompletion(unfoldLines(String(got.data)), fields).map(foldLine).join('\r\n');
+
+  const headers = { Authorization: auth, 'Content-Type': 'text/calendar; charset=utf-8' };
+  // Sent back exactly as stored — see the verbatim-etag note in fetchCalDavTasks. Omitted (PUT
+  // unconditional) when we never had one to begin with.
+  const etag = got.headers?.etag != null ? String(got.headers.etag) : task.etag;
+  if (etag != null) headers['If-Match'] = etag;
+
+  const resp = await requestFn({ method: 'PUT', url, data: icalText, headers, validateStatus: () => true });
 
   if (resp.status === 412) {
     throw new Error('CalDAV PUT failed: task was changed on the server since it was last fetched (412 Precondition Failed)');
   }
   if (resp.status < 200 || resp.status >= 300) throw new Error(`CalDAV PUT failed: ${resp.status}`);
 
-  const etag = resp.headers?.etag != null ? String(resp.headers.etag) : null;
+  const newEtag = resp.headers?.etag != null ? String(resp.headers.etag) : null;
   return normalizeVtodo(vtodoFromIcal(icalText), {
-    listId: list.id, listName: list.name, listUrl: list.url, accountId: account.id, etag,
+    listId: list.id, listName: list.name, listUrl: list.url, accountId: account.id, etag: newEtag, href: url,
   });
+}
+
+const COMPLETION_PROPS = new Set(['STATUS', 'PERCENT-COMPLETE', 'COMPLETED', 'DTSTAMP', 'LAST-MODIFIED']);
+
+function setVtodoCompletion(lines, { status, percent, completedAt }) {
+  const begin = lines.indexOf('BEGIN:VTODO');
+  const end = lines.indexOf('END:VTODO', begin);
+  if (begin < 0 || end < 0) throw new Error('CalDAV task has no VTODO');
+  const now = toIcalUtc(new Date().toISOString());
+  const body = lines.slice(begin + 1, end).filter((l) => !COMPLETION_PROPS.has(splitLine(l).name));
+  body.push(`DTSTAMP:${now}`, `LAST-MODIFIED:${now}`, `STATUS:${status || 'NEEDS-ACTION'}`);
+  body.push(`PERCENT-COMPLETE:${Math.min(100, Math.max(0, Math.round(Number(percent)) || 0))}`);
+  if (completedAt) body.push(`COMPLETED:${toIcalUtc(completedAt)}`);
+  return [...lines.slice(0, begin + 1), ...body, ...lines.slice(end)];
 }
 
 // ── Repeating events ──

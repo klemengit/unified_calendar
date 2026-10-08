@@ -35,7 +35,7 @@ test('normalizeVtodo: full VTODO maps every field', () => {
   const comp = parseOneVtodo(ics);
   const task = normalizeVtodo(comp, CTX);
 
-  assert.equal(task.id, 'cdavtodo-uid-1');
+  assert.equal(task.id, `cdavtodo-${CTX.listId}-uid-1`);
   assert.equal(task.uid, 'uid-1');
   assert.equal(task.title, 'Renew the parking permit');
   assert.equal(task.notes, 'Connect bank\naccount, please.');

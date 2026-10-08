@@ -215,46 +215,98 @@ test('fetchCalDavTasks: a malformed VTODO is skipped, siblings still parse', asy
   assert.equal(tasks[0].etag, '1111673-3-1784650673809');
 });
 
-// ── updateCalDavTask: If-Match ──
+// ── updateCalDavTask: edit in place, If-Match ──
+
+// A server that serves `stored` on GET and records the PUT.
+function fakeTaskServer(stored, { getEtag = null, putStatus = 204 } = {}) {
+  const calls = [];
+  __setRequestFn(async (config) => {
+    calls.push(config);
+    if (config.method === 'GET') return { status: 200, data: stored, headers: getEtag ? { etag: getEtag } : {} };
+    return { status: putStatus, data: '', headers: { etag: 'new-etag' } };
+  });
+  return calls;
+}
+
+const COMPLETE = { status: 'COMPLETED', percent: 100, completedAt: '2026-10-08T10:00:00.000Z' };
 
 test('updateCalDavTask: sends If-Match verbatim with an unquoted etag', async () => {
-  let seenHeaders = null;
-  __setRequestFn(async (config) => {
-    seenHeaders = config.headers;
-    return { status: 204, data: '', headers: {} };
-  });
-
+  const calls = fakeTaskServer(vtodoIcs('uid-1'));
   const task = { uid: 'uid-1', etag: '1111673-3-1784650673809' };
-  await updateCalDavTask(ACCOUNT, LIST, task, { title: 'Renamed', status: 'NEEDS-ACTION', percent: 0 });
+  await updateCalDavTask(ACCOUNT, LIST, task, COMPLETE);
   __setRequestFn(null);
 
-  assert.equal(seenHeaders['If-Match'], '1111673-3-1784650673809');
-  assert.ok(!seenHeaders['If-Match'].startsWith('"'));
+  const put = calls.find((c) => c.method === 'PUT');
+  assert.equal(put.headers['If-Match'], '1111673-3-1784650673809');
 });
 
-test('updateCalDavTask: omits If-Match when etag is null (unconditional PUT)', async () => {
-  let seenHeaders = null;
-  __setRequestFn(async (config) => {
-    seenHeaders = config.headers;
-    return { status: 204, data: '', headers: {} };
-  });
-
-  const task = { uid: 'uid-2', etag: null };
-  await updateCalDavTask(ACCOUNT, LIST, task, { title: 'Renamed', status: 'NEEDS-ACTION', percent: 0 });
+test('updateCalDavTask: prefers the etag the GET returned', async () => {
+  const calls = fakeTaskServer(vtodoIcs('uid-1'), { getEtag: 'fresh-etag' });
+  await updateCalDavTask(ACCOUNT, LIST, { uid: 'uid-1', etag: 'old-etag' }, COMPLETE);
   __setRequestFn(null);
 
-  assert.ok(!('If-Match' in seenHeaders));
+  assert.equal(calls.find((c) => c.method === 'PUT').headers['If-Match'], 'fresh-etag');
+});
+
+test('updateCalDavTask: omits If-Match when no etag is known (unconditional PUT)', async () => {
+  const calls = fakeTaskServer(vtodoIcs('uid-2'));
+  await updateCalDavTask(ACCOUNT, LIST, { uid: 'uid-2', etag: null }, COMPLETE);
+  __setRequestFn(null);
+
+  assert.ok(!('If-Match' in calls.find((c) => c.method === 'PUT').headers));
 });
 
 test('updateCalDavTask: 412 throws an error that says the task changed on the server', async () => {
-  __setRequestFn(async () => ({ status: 412, data: '', headers: {} }));
-
-  const task = { uid: 'uid-3', etag: 'stale-etag' };
+  fakeTaskServer(vtodoIcs('uid-3'), { putStatus: 412 });
   await assert.rejects(
-    () => updateCalDavTask(ACCOUNT, LIST, task, { title: 'x', status: 'NEEDS-ACTION', percent: 0 }),
+    () => updateCalDavTask(ACCOUNT, LIST, { uid: 'uid-3', etag: 'stale-etag' }, COMPLETE),
     /changed on the server/
   );
   __setRequestFn(null);
+});
+
+test('updateCalDavTask: writes to the href the server reported, not <uid>.ics', async () => {
+  const calls = fakeTaskServer(vtodoIcs('uid-4'));
+  const href = 'https://dav.example.org/caldav/tasks/A1B2-reminder.ics';
+  const task = await updateCalDavTask(ACCOUNT, LIST, { uid: 'uid-4', etag: 'e', href }, COMPLETE);
+  __setRequestFn(null);
+
+  assert.deepEqual(calls.map((c) => `${c.method} ${c.url}`), [`GET ${href}`, `PUT ${href}`]);
+  assert.equal(task.href, href);
+});
+
+test('updateCalDavTask: keeps properties the app does not model', async () => {
+  const stored = vtodoIcs('uid-5', [
+    'DUE;TZID=Europe/Ljubljana:20261010T090000',
+    'PRIORITY:3',
+    'RELATED-TO:parent-uid',
+    'X-APPLE-SORT-ORDER:12',
+    'COMPLETED:20200101T000000Z',
+    'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT15M', 'END:VALARM',
+  ]);
+  const calls = fakeTaskServer(stored);
+  const task = await updateCalDavTask(ACCOUNT, LIST, { uid: 'uid-5', etag: 'e' }, COMPLETE);
+  __setRequestFn(null);
+
+  const sent = calls.find((c) => c.method === 'PUT').data;
+  for (const line of ['DUE;TZID=Europe/Ljubljana:20261010T090000', 'PRIORITY:3', 'RELATED-TO:parent-uid',
+    'X-APPLE-SORT-ORDER:12', 'TRIGGER:-PT15M', 'STATUS:COMPLETED', 'PERCENT-COMPLETE:100',
+    'COMPLETED:20261008T100000Z']) {
+    assert.ok(sent.includes(line), `missing ${line}`);
+  }
+  assert.ok(!sent.includes('STATUS:NEEDS-ACTION'));
+  assert.ok(!sent.includes('COMPLETED:20200101'));
+  assert.equal(task.completed, true);
+});
+
+test('updateCalDavTask: un-completing drops COMPLETED', async () => {
+  const calls = fakeTaskServer(vtodoIcs('uid-6', ['COMPLETED:20261001T000000Z']));
+  await updateCalDavTask(ACCOUNT, LIST, { uid: 'uid-6', etag: 'e' }, { status: 'NEEDS-ACTION', percent: 0 });
+  __setRequestFn(null);
+
+  const sent = calls.find((c) => c.method === 'PUT').data;
+  assert.ok(!sent.includes('COMPLETED:'));
+  assert.ok(sent.includes('STATUS:NEEDS-ACTION'));
 });
 
 // ── createCalDavTask: sanity coverage of the third CRUD path ──

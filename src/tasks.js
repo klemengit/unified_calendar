@@ -23,6 +23,14 @@ function escText(s) {
     .replace(/\r\n|\r|\n/g, '\\n');
 }
 
+// Long lines continue on the next line after a space (RFC 5545 §3.1).
+function foldLine(line) {
+  if (line.length <= 74) return line;
+  const parts = [];
+  for (let i = 0; i < line.length; i += 73) parts.push(line.slice(i, i + 73));
+  return parts.join('\r\n ');
+}
+
 function toIcalUtc(dt) {
   return new Date(dt).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
 }
@@ -83,7 +91,7 @@ function dateField(prop) {
  * across the app. The caller is responsible for filtering to `comp.type === 'VTODO'` first (the
  * same way fetchCalDavEvents filters to VEVENT before calling normalizeIcalEvent).
  */
-export function normalizeVtodo(comp, { listId, listName, listUrl, accountId, etag } = {}) {
+export function normalizeVtodo(comp, { listId, listName, listUrl, accountId, etag, href } = {}) {
   const uid = String(comp.uid || '');
   const title = textOf(comp.summary).trim() || '(no title)';
   const notes = textOf(comp.description).trim();
@@ -105,7 +113,8 @@ export function normalizeVtodo(comp, { listId, listName, listUrl, accountId, eta
   const completedAt = completedIso(comp.completed);
 
   return {
-    id: `cdavtodo-${uid}`,
+    // The list is part of the id: two lists (or accounts) can hold the same UID.
+    id: `cdavtodo-${listId}-${uid}`,
     uid,
     title,
     notes,
@@ -123,6 +132,9 @@ export function normalizeVtodo(comp, { listId, listName, listUrl, accountId, eta
     listUrl,
     accountId,
     etag: etag ?? null,
+    // Where the server keeps the task. Its file name need not be <uid>.ics (Apple Reminders,
+    // DAVx5), so writes go here rather than to a path built from the UID.
+    href: href ?? null,
   };
 }
 
@@ -184,7 +196,7 @@ export function buildVtodoIcal(uid, fields = {}) {
   if (completedAt) lines.push(`COMPLETED:${toIcalUtc(completedAt)}`);
 
   lines.push('END:VTODO', 'END:VCALENDAR');
-  return lines.join('\r\n');
+  return lines.map(foldLine).join('\r\n');
 }
 
 // ── applyCompletion ──
