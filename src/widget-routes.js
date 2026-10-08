@@ -4,11 +4,19 @@ import {
   toCachedEvent,
   mergeEventsWithCache,
 } from './widget.js';
+// tasks.js is pure (no network/fs) so it's imported directly, same as widget.js above — only the
+// network-touching caldav.js functions go through `deps` (see registerWidgetRoutes).
+import { parseQuickAdd, applyCompletion, resolveListToken } from './tasks.js';
 
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MAX_RANGE_DAYS = 100;
 const MAX_CACHED_RANGES = 24;
 const MAX_IMPORTANT_ID_LEN = 1000;
+const MAX_TASK_TEXT_LEN = 500;
+const MAX_TASK_ID_LEN = 1000;
+// The widget polls every 15 minutes, often from several monitors at once; task lists change far
+// less often than that, so discovery is cached for an hour instead of re-running PROPFIND per poll.
+const TASK_LIST_CACHE_TTL_MS = 60 * 60 * 1000;
 
 // Validates a star/unstar body — returns an error message, or null when the body is valid.
 // Exported because the web app's POST /api/settings/important writes the same field through the
@@ -20,6 +28,34 @@ export function importantBodyError(body) {
   }
   if (typeof important !== 'boolean') {
     return 'important must be a boolean';
+  }
+  return null;
+}
+
+// Validates a POST /api/widget/tasks body — mirrors importantBodyError's shape and is exported for
+// the same reason: a future web-app quick-add route can share it.
+export function addTaskBodyError(body) {
+  const { text, listId, today } = body && typeof body === 'object' ? body : {};
+  if (typeof text !== 'string' || text.length < 1 || text.length > MAX_TASK_TEXT_LEN) {
+    return `text must be a string of 1-${MAX_TASK_TEXT_LEN} characters`;
+  }
+  if (listId !== undefined && (typeof listId !== 'string' || listId.length < 1)) {
+    return 'listId must be a non-empty string';
+  }
+  if (today !== undefined && (typeof today !== 'string' || !DATE_RE.test(today))) {
+    return 'today must be a YYYY-MM-DD date';
+  }
+  return null;
+}
+
+// Validates a POST /api/widget/tasks/complete body.
+export function completeTaskBodyError(body) {
+  const { id, completed } = body && typeof body === 'object' ? body : {};
+  if (typeof id !== 'string' || id.length < 1 || id.length > MAX_TASK_ID_LEN) {
+    return `id must be a string of 1-${MAX_TASK_ID_LEN} characters`;
+  }
+  if (typeof completed !== 'boolean') {
+    return 'completed must be a boolean';
   }
   return null;
 }
@@ -57,6 +93,44 @@ function toCachedEntry(entry) {
   return { usedAt: entry?.usedAt, providers };
 }
 
+// Builds a lazy, TTL-cached task-list discovery function scoped to one registerWidgetRoutes call
+// (a fresh Map per call, not a module-level singleton) so separate server instances/tests never
+// share stale results. A failed discovery is never written to the cache, so the very next call
+// retries it rather than remembering the failure for the rest of the TTL.
+function createTaskListCache(discoverTaskLists) {
+  const byAccount = new Map();
+  return async function getTaskLists(account, { now, forceRefresh = false } = {}) {
+    const nowMs = now.getTime();
+    const cached = byAccount.get(account.id);
+    if (cached && !forceRefresh && nowMs < cached.expiresAt) {
+      return cached.lists;
+    }
+    const lists = await discoverTaskLists(account.server, account.username, account.password, account.id);
+    byAccount.set(account.id, { lists, expiresAt: nowMs + TASK_LIST_CACHE_TTL_MS });
+    return lists;
+  };
+}
+
+// Discovers task lists for every configured CalDAV account and flattens them into {account, list}
+// pairs. One account's discovery failing lands in `errors` (keyed by accountId, since there's no
+// listId yet to blame) rather than failing the others.
+async function collectListEntries(deps, getTaskLists, now, { forceRefresh = false } = {}) {
+  const accounts = deps.getCaldavAccounts() || [];
+  const entries = [];
+  const errors = [];
+  for (const account of accounts) {
+    let lists;
+    try {
+      lists = await getTaskLists(account, { now, forceRefresh });
+    } catch (err) {
+      errors.push({ listId: account.id, message: err?.message || 'Task list discovery failed' });
+      continue;
+    }
+    for (const list of lists) entries.push({ account, list });
+  }
+  return { entries, errors };
+}
+
 // Registers the widget's server API on `app`; must run before session middleware (never touches req.session).
 export function registerWidgetRoutes(app, deps) {
   const checkAuthorized = (req, res) => {
@@ -66,6 +140,9 @@ export function registerWidgetRoutes(app, deps) {
     }
     return true;
   };
+
+  // One cache per registration, shared by all three task routes below.
+  const getTaskLists = createTaskListCache(deps.discoverTaskLists);
 
   app.get('/api/widget/events', async (req, res) => {
     res.set('Cache-Control', 'no-store');
@@ -186,6 +263,191 @@ export function registerWidgetRoutes(app, deps) {
 
       deps.setEventImportant(id, important);
       res.json({ id, important });
+    }
+  );
+
+  app.get('/api/widget/tasks', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!checkAuthorized(req, res)) return;
+
+    // One outer try/catch, same reasoning as GET /api/widget/events: an uncaught throw after an
+    // await here would otherwise crash the process.
+    try {
+      const now = deps.now();
+      // `?refresh=lists` re-runs discovery now instead of waiting out the TTL, so a list created on
+      // the server shows up on the next manual refresh. Any other value is ignored.
+      const forceRefresh = req.query.refresh === 'lists';
+      const { entries, errors } = await collectListEntries(deps, getTaskLists, now, { forceRefresh });
+
+      const lists = entries.map(({ account, list }) => ({
+        id: list.id,
+        name: list.name,
+        accountId: account.id,
+        url: list.url,
+      }));
+
+      const tasks = [];
+      for (const { account, list } of entries) {
+        try {
+          const listTasks = await deps.fetchCalDavTasks(account, list);
+          tasks.push(...listTasks);
+        } catch (err) {
+          // One list failing must not fail the whole response — the others still get returned.
+          errors.push({ listId: list.id, message: err?.message || 'Failed to fetch tasks' });
+        }
+      }
+
+      res.json({ tasks, lists, syncedAt: now.toISOString(), errors });
+    } catch (err) {
+      console.error('widget tasks handler failed:', err?.message || err);
+      if (!res.headersSent) res.status(500).json({ error: 'Internal error' });
+    }
+  });
+
+  app.post(
+    '/api/widget/tasks',
+    (req, res, next) => {
+      // Runs before express.json() so an unauthenticated caller's body is never read.
+      res.set('Cache-Control', 'no-store');
+      if (!checkAuthorized(req, res)) return;
+      next();
+    },
+    express.json({ limit: '2kb' }),
+    (err, req, res, next) => {
+      if (err) return res.status(400).json({ error: 'invalid request body' });
+      next();
+    },
+    async (req, res) => {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const bodyError = addTaskBodyError(body);
+      if (bodyError) return res.status(400).json({ error: bodyError });
+
+      // Parsed before any discovery: a malformed text is a 400 that needs no network round trip.
+      const now = deps.now();
+      let parsed;
+      try {
+        // `today` is the caller's own date. The server's clock zone can differ (the VPS runs in
+        // UTC), and due:today typed just after midnight must not land on yesterday.
+        const [y, m, d] = (body.today || '').split('-').map(Number);
+        parsed = parseQuickAdd(body.text, { now: body.today ? new Date(y, m - 1, d, 12) : now });
+      } catch (err) {
+        // Throws on an empty title (e.g. whitespace-only text) or two +list tokens — a 400, not a 500.
+        return res.status(400).json({ error: err.message });
+      }
+
+      try {
+        let { entries } = await collectListEntries(deps, getTaskLists, now);
+        // The list may have been created after the cache was last populated — one forced retry
+        // before giving up, rather than making the client wait out a full TTL for a list it just made.
+        const rediscover = async () => {
+          ({ entries } = await collectListEntries(deps, getTaskLists, now, { forceRefresh: true }));
+        };
+
+        // Precedence: a +token in the text > an explicit listId > the first discovered list. The
+        // widget sends its single selected list chip as listId, so typing +name still overrides it.
+        let target;
+        if (parsed.listToken !== null) {
+          const nameOf = (e) => e.list.name;
+          let resolved = resolveListToken(parsed.listToken, entries, nameOf);
+          if (resolved.reason === 'unknown') {
+            await rediscover();
+            resolved = resolveListToken(parsed.listToken, entries, nameOf);
+          }
+          // 400, not the listId path's 404: the client sent text it can fix, not a resource id.
+          if (!resolved.list) return res.status(400).json({ error: resolved.error });
+          target = resolved.list;
+        } else if (body.listId) {
+          target = entries.find((e) => e.list.id === body.listId);
+          if (!target) {
+            await rediscover();
+            target = entries.find((e) => e.list.id === body.listId);
+          }
+          // Unknown listId -> 404 (it names a specific resource that doesn't exist), as opposed
+          // to 400 which this route uses for malformed request shape.
+          if (!target) return res.status(404).json({ error: `Unknown list id: ${body.listId}` });
+        } else {
+          target = entries[0];
+          if (!target) return res.status(400).json({ error: 'No task list is configured yet' });
+        }
+
+        const fields = {
+          title: parsed.title,
+          notes: '',
+          due: parsed.due,
+          dueHasTime: parsed.dueHasTime,
+          start: null,
+          priority: parsed.priority,
+          categories: parsed.categories,
+          status: 'NEEDS-ACTION',
+          percent: 0,
+          completedAt: null,
+          created: now.toISOString(),
+        };
+
+        const task = await deps.createCalDavTask(target.account, target.list, fields);
+        res.status(201).json({ task });
+      } catch (err) {
+        console.error('widget task add failed:', err?.message || err);
+        res.status(502).json({ error: err?.message || 'Failed to create task' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/widget/tasks/complete',
+    (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      if (!checkAuthorized(req, res)) return;
+      next();
+    },
+    express.json({ limit: '2kb' }),
+    (err, req, res, next) => {
+      if (err) return res.status(400).json({ error: 'invalid request body' });
+      next();
+    },
+    async (req, res) => {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const bodyError = completeTaskBodyError(body);
+      if (bodyError) return res.status(400).json({ error: bodyError });
+
+      try {
+        const now = deps.now();
+        const { entries } = await collectListEntries(deps, getTaskLists, now);
+
+        // The id alone doesn't say which list/account it lives in, so — same cost as a GET —
+        // every list is fetched until the task turns up.
+        let found = null;
+        let foundEntry = null;
+        for (const entry of entries) {
+          let listTasks;
+          try {
+            listTasks = await deps.fetchCalDavTasks(entry.account, entry.list);
+          } catch {
+            continue; // a list we can't read right now just isn't where the task turns up
+          }
+          const match = listTasks.find((t) => t.id === body.id);
+          if (match) {
+            found = match;
+            foundEntry = entry;
+            break;
+          }
+        }
+
+        if (!found) return res.status(404).json({ error: 'Unknown task id' });
+
+        const fields = applyCompletion(found, body.completed, now);
+        const task = await deps.updateCalDavTask(foundEntry.account, foundEntry.list, found, fields);
+        res.json({ task });
+      } catch (err) {
+        const message = err?.message || 'Failed to update task';
+        // updateCalDavTask throws this specific message on a 412 (etag mismatch) — surface it as
+        // 409 Conflict rather than the generic 502 below.
+        if (message.includes('changed on the server')) {
+          return res.status(409).json({ error: message });
+        }
+        console.error('widget task complete failed:', message);
+        res.status(502).json({ error: message });
+      }
     }
   );
 }

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LEAD_MINUTES, isTimeZone } from './reminders.js';
 
 // Simple file-backed store for ICS subscription links so they survive restarts.
 // This module persists feeds, settings (including the starred-event id list) and OAuth tokens —
@@ -54,6 +55,13 @@ const DEFAULT_SETTINGS = {
   compactDensity: 'emphasised', // 'emphasised' | 'dots' | 'titles'
   importantEvents: [], // string[] of FullCalendar event ids
   weekends: 'tint', // 'off' | 'tint' | 'muted' | 'divider'
+  // Push reminders, sent to every device that turned notifications on.
+  reminders: {
+    minutesBefore: 10, // one of LEAD_MINUTES
+    allDayHour: 8, // hour of the day all-day events are announced; null = never
+    mutedCalendars: [], // calendar ids that send no reminders
+    timeZone: null, // IANA zone the reminders are timed in, reported by the browser
+  },
 };
 let settings = clone(DEFAULT_SETTINGS);
 let nextCaldavId = 1;
@@ -78,7 +86,7 @@ function normalizeImportantEvents(list) {
 // Crash-safe private write: a temp file created 0600 from the outset (so it is never briefly
 // world-readable), then renamed over the target. The rename carries the 0600 with it, which is
 // how an existing looser file gets tightened.
-function writePrivate(target, name, data) {
+export function writePrivate(target, name, data) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tmp = path.join(DATA_DIR, `.${name}.${process.pid}.${Date.now()}.tmp`);
   try {
@@ -103,9 +111,26 @@ function persist() {
   writePrivate(FILE, 'feeds.json', JSON.stringify(feeds, null, 2));
 }
 
-// settings.json holds the OAuth access and refresh tokens and the CalDAV password in plaintext.
+// Accounts whose password now lives in gnome-keyring. Their in-memory copy is hydrated at startup
+// so every existing caller can go on reading account.password unchanged, but it must never travel
+// back to disk: starring a single event persists settings, so without this the very next star
+// would rewrite the plaintext the migration had just removed.
+const keyringBacked = new Set();
+
+function settingsForDisk() {
+  if (keyringBacked.size === 0) return settings;
+  return {
+    ...settings,
+    caldavAccounts: (settings.caldavAccounts || []).map((a) =>
+      keyringBacked.has(a.id) ? { ...a, password: '' } : a
+    ),
+  };
+}
+
+// settings.json holds the OAuth access and refresh tokens, and — until it has been migrated into
+// the keyring — the CalDAV password in plaintext.
 function persistSettings() {
-  writePrivate(SETTINGS_FILE, 'settings.json', JSON.stringify(settings, null, 2));
+  writePrivate(SETTINGS_FILE, 'settings.json', JSON.stringify(settingsForDisk(), null, 2));
 }
 
 export function loadFeeds() {
@@ -197,12 +222,27 @@ export function loadSettings() {
     settings.weekends = ['off', 'tint', 'muted', 'divider'].includes(saved.weekends)
       ? saved.weekends
       : DEFAULT_SETTINGS.weekends;
+    settings.reminders = normalizeReminders(saved.reminders, DEFAULT_SETTINGS.reminders);
     nextCaldavId =
       settings.caldavAccounts.reduce((max, a) => Math.max(max, parseInt(String(a.id).slice(5), 10) || 0), 0) + 1;
   } catch {
     settings = clone(DEFAULT_SETTINGS);
   }
   return settings;
+}
+
+// Takes each valid field of `input`, and the rest from `base`.
+function normalizeReminders(input, base) {
+  const r = input && typeof input === 'object' ? input : {};
+  const hourOk = r.allDayHour === null || (Number.isInteger(r.allDayHour) && r.allDayHour >= 0 && r.allDayHour <= 23);
+  return {
+    minutesBefore: LEAD_MINUTES.includes(r.minutesBefore) ? r.minutesBefore : base.minutesBefore,
+    allDayHour: hourOk ? r.allDayHour : base.allDayHour,
+    mutedCalendars: Array.isArray(r.mutedCalendars)
+      ? [...new Set(r.mutedCalendars.filter((id) => typeof id === 'string' && id.length <= 200))].slice(0, 500)
+      : clone(base.mutedCalendars),
+    timeZone: isTimeZone(r.timeZone) ? r.timeZone : base.timeZone,
+  };
 }
 
 export function getSettings() {
@@ -231,6 +271,9 @@ export function updateSettings(patch = {}) {
     next.importantEvents = normalizeImportantEvents(patch.importantEvents);
   }
   if (['off', 'tint', 'muted', 'divider'].includes(patch.weekends)) next.weekends = patch.weekends;
+  if (patch.reminders && typeof patch.reminders === 'object') {
+    next.reminders = normalizeReminders(patch.reminders, settings.reminders);
+  }
   settings = next;
   persistSettings();
   return settings;
@@ -281,7 +324,34 @@ export function addCaldavAccount(account) {
 
 export function removeCaldavAccount(id) {
   settings.caldavAccounts = (settings.caldavAccounts || []).filter((a) => a.id !== id);
+  keyringBacked.delete(id);
   persistSettings();
+}
+
+/**
+ * Drops an account's plaintext password from settings.json, once its keyring copy has been written
+ * AND read back intact. Called only by the migration in src/secrets.js — calling it before the
+ * keyring holds a verified copy would destroy the only copy of the password.
+ */
+export function clearCaldavPassword(id) {
+  const account = (settings.caldavAccounts || []).find((a) => a.id === id);
+  if (!account) return null;
+  keyringBacked.add(id);
+  account.password = '';
+  persistSettings();
+  return account;
+}
+
+/**
+ * Puts a keyring-held password back into the in-memory account at startup, so the CalDAV callers
+ * keep working unchanged. Deliberately does not persist: this value must stay out of settings.json.
+ */
+export function hydrateCaldavPassword(id, password) {
+  const account = (settings.caldavAccounts || []).find((a) => a.id === id);
+  if (!account || typeof password !== 'string' || password === '') return null;
+  keyringBacked.add(id);
+  account.password = password;
+  return account;
 }
 
 /** Replace the calendar list for an account (after selection). */

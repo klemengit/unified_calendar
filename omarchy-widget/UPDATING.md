@@ -32,8 +32,9 @@ Our edits inside the copied files:
 
 - `BarWidget.qml`: the `CalendarData` instance, `calendarData` passed to the panel
   in the panel injection, the important-day mark next to the clock label, the
-  primary-instance election, and the extra `IpcHandler` methods
-  (`calendarHealth`, `calendarRefresh`, `selectDay`, `toggleUpcoming`).
+  primary-instance election, the `TasksData` instance and its `refreshTasks`
+  broadcast target, and the extra `IpcHandler` methods (`calendarHealth`,
+  `calendarRefresh`, `selectDay`, `toggleUpcoming`).
 - `Panel.qml`: the `calendarData` property and the day/upcoming state, the day-cell
   delegate replaced by `DayCell`, and the `DayDetails` and `UpcomingList` sections
   under the month navigation.

@@ -46,14 +46,26 @@ import {
   getTokens,
   saveTokens,
   setEventImportant,
+  clearCaldavPassword,
+  hydrateCaldavPassword,
   DATA_DIR,
 } from './src/store.js';
+import {
+  migratePlaintextPasswords,
+  hydrateKeyringPasswords,
+  deletePassword,
+  secretToolAvailable,
+} from './src/secrets.js';
 import {
   discoverCalendars,
   createCalDavEvent,
   updateCalDavEvent,
   moveCalDavEvent,
   deleteCalDavEvent,
+  discoverTaskLists,
+  fetchCalDavTasks,
+  createCalDavTask,
+  updateCalDavTask,
   updateCalDavOccurrence,
   updateCalDavSeries,
   deleteCalDavOccurrence,
@@ -65,12 +77,37 @@ import {
   widgetCacheEnabled,
 } from './src/widget-cache-store.js';
 import { listCalendars } from './src/calendar-list.js';
+import { createReminderLoop, isTimeZone as isReminderTimeZone } from './src/reminders.js';
+import {
+  publicKey as pushPublicKey,
+  hasSubscribers,
+  subscriptionCount,
+  isSubscription,
+  addSubscription,
+  removeSubscription,
+  loadSent,
+  saveSent,
+  sendPush,
+} from './src/push-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 loadFeeds();
 loadSettings();
+
+// CalDAV passwords belong in gnome-keyring, not settings.json. The migration only blanks the
+// plaintext copy after reading the keyring copy back intact, and hydration then puts the password
+// back in memory — so every CalDAV call site below keeps reading `account.password` unchanged,
+// while the store makes sure that value never reaches disk again. With no keyring on the machine
+// both steps are skipped and the plaintext password keeps working. Also run after an account is
+// added, so its password does not wait in settings.json for the next restart.
+async function moveCaldavPasswordsToKeyring() {
+  if (!secretToolAvailable()) return;
+  await migratePlaintextPasswords({ getCaldavAccounts, clearCaldavPassword });
+  await hydrateKeyringPasswords({ getCaldavAccounts, hydrateCaldavPassword });
+}
+await moveCaldavPasswordsToKeyring();
 
 const ICS_PALETTE = ['#9333ea', '#ea580c', '#0891b2', '#db2777', '#ca8a04'];
 
@@ -101,6 +138,10 @@ registerWidgetRoutes(app, {
   saveTokens,
   listCalendars,
   setEventImportant,
+  discoverTaskLists,
+  fetchCalDavTasks,
+  createCalDavTask,
+  updateCalDavTask,
   // Off unless UNIFIED_CALENDAR_WIDGET_CACHE is set: the null store keeps event data off disk.
   cacheStore: widgetCacheEnabled() ? createWidgetCacheStore({ dir: DATA_DIR }) : createNullCacheStore(),
   isAuthorized,
@@ -272,7 +313,70 @@ app.get('/api/settings', (req, res) => {
 });
 
 app.put('/api/settings', (req, res) => {
-  res.json(updateSettings(req.body || {}));
+  const result = updateSettings(req.body || {});
+  if (req.body?.reminders) reminderLoop.invalidate();
+  res.json(result);
+});
+
+// ── Reminders (web push) ──
+// The push service needs a contact for the sender: the app's own address when it has a public one.
+const PUSH_SUBJECT = config.baseUrl.startsWith('https://') ? config.baseUrl : 'mailto:unified-calendar@example.org';
+
+// The same token-on-disk fetch the widget uses, since the loop runs with no browser session.
+async function reminderEvents(timeMin, timeMax) {
+  const tokens = { ...getTokens() };
+  const before = JSON.stringify(tokens);
+  const { events } = await getUnifiedEvents(
+    { tokens }, timeMin, timeMax, getFeeds(), getSettings().providers, getGoogleCalendars(), getCaldavAccounts()
+  );
+  if (JSON.stringify(tokens) !== before) saveTokens(tokens);
+  return events;
+}
+
+const reminderLoop = createReminderLoop({
+  fetchEvents: reminderEvents,
+  getConfig: () => {
+    const { reminders, timeFormat } = getSettings();
+    const timeZone = isReminderTimeZone(reminders.timeZone)
+      ? reminders.timeZone
+      : Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return { ...reminders, timeZone, timeFormat };
+  },
+  hasSubscribers,
+  send: (payload) => sendPush(payload, { subject: PUSH_SUBJECT }),
+  loadSent,
+  saveSent,
+});
+reminderLoop.start();
+
+app.get('/api/push', (req, res) => {
+  res.json({ publicKey: pushPublicKey(), devices: subscriptionCount() });
+});
+
+app.post('/api/push/subscribe', (req, res) => {
+  const { subscription, label } = req.body || {};
+  if (!isSubscription(subscription)) return res.status(400).json({ error: 'Invalid subscription' });
+  addSubscription(subscription, typeof label === 'string' ? label : '');
+  reminderLoop.invalidate();
+  res.json({ ok: true, devices: subscriptionCount() });
+});
+
+app.post('/api/push/unsubscribe', (req, res) => {
+  const { endpoint } = req.body || {};
+  if (typeof endpoint !== 'string') return res.status(400).json({ error: 'endpoint is required' });
+  removeSubscription(endpoint);
+  res.json({ ok: true, devices: subscriptionCount() });
+});
+
+app.post('/api/push/test', async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (typeof endpoint !== 'string') return res.status(400).json({ error: 'endpoint is required' });
+  const delivered = await sendPush(
+    { title: 'Unified Calendar', body: 'Notifications work on this device.', tag: 'test', url: '/' },
+    { subject: PUSH_SUBJECT, endpoint }
+  );
+  if (!delivered) return res.status(502).json({ error: 'The push service did not accept the notification' });
+  res.json({ ok: true });
 });
 
 // Stars/unstars ONE event id, the same read-modify-write the widget uses (POST /api/widget/important).
@@ -563,14 +667,17 @@ app.post('/api/caldav/accounts', async (req, res) => {
       visible: true,
     }));
     setCaldavCalendars(account.id, calendars);
+    await moveCaldavPasswordsToKeyring();
     res.status(201).json({ account: publicCaldavAccount(getCaldavAccount(account.id)) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete('/api/caldav/accounts/:id', (req, res) => {
+app.delete('/api/caldav/accounts/:id', async (req, res) => {
+  const account = getCaldavAccount(req.params.id);
   removeCaldavAccount(req.params.id);
+  if (account && secretToolAvailable()) await deletePassword(account.id, account.username);
   res.json({ ok: true });
 });
 

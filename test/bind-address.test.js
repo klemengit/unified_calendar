@@ -11,8 +11,9 @@ import express from 'express';
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // The default bind address is a security boundary, not a preference: with no AUTH_PASSWORD there
-// is no login at all, and data/settings.json holds OAuth refresh tokens and a plaintext CalDAV
-// password. These check the behaviour an attacker would meet, not the text of config.js.
+// is no login at all, and data/settings.json always holds OAuth refresh tokens in plaintext (and
+// the CalDAV password too, without a system keyring). These check the behaviour an attacker would
+// meet, not the text of config.js.
 
 /** A bare server bound the way server.js binds it, so the assertion is about listen(), not routes. */
 async function listenLike(host) {

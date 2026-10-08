@@ -6,6 +6,7 @@ import qs.Ui
 import "Model.js" as Model
 import "CalendarModel.js" as CalendarModel
 import "DataModel.js" as DataModel
+import "TaskModel.js" as TaskModel
 
 // Date/time label for the bar, and the host for the calendar popup.
 //
@@ -112,6 +113,7 @@ BarWidget {
     if ("anchorItem" in target) target.anchorItem = button
     if ("hostWidget" in target) target.hostWidget = root
     if ("calendarData" in target) target.calendarData = calendarData
+    if ("tasksData" in target) target.tasksData = tasksData
   }
 
   implicitWidth: button.implicitWidth
@@ -133,14 +135,31 @@ BarWidget {
     onToggleSucceeded: root.broadcast("refreshCalendar")
   }
 
+  // Mirrors calendarData above: same Process+curl fetch / FileView cache / primary-election
+  // shape (see TasksData.qml's own header comment), just for the Tasks tab's data instead.
+  TasksData {
+    id: tasksData
+    settings: root.settings
+  }
+
+  readonly property int overdueTaskCount: TaskModel.overdueCount(tasksData.tasks, displayDate.getTime())
+
   function refreshCalendar() {
     calendarData.refresh(true)
+  }
+
+  // Separate from refreshCalendar, which also runs after every star toggle: re-discovering task
+  // lists there would cost a PROPFIND per click for nothing.
+  function refreshTasks() {
+    tasksData.refresh(true, true)
   }
 
   function electPrimary() {
     var peers = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : []
     calendarData.instances = peers.length
     calendarData.primary = DataModel.isPrimaryInstance(peers, root)
+    tasksData.instances = peers.length
+    tasksData.primary = DataModel.isPrimaryInstance(peers, root)
   }
 
   function electPrimaryEverywhere() {
@@ -200,7 +219,10 @@ BarWidget {
     function hide(): void { root.close() }
     function toggle(): void { root.togglePanel() }
     function calendarHealth(): string { return calendarData.health() }
-    function calendarRefresh(): void { root.broadcast("refreshCalendar") }
+    function calendarRefresh(): void {
+      root.broadcast("refreshCalendar")
+      root.broadcast("refreshTasks")
+    }
     function selectDay(key: string): void { root.selectDay(key) }
     function toggleUpcoming(): void { root.toggleUpcoming() }
     function calendarTestReminder(): string { return root.sendTestReminder() }
@@ -264,6 +286,26 @@ BarWidget {
         : Math.round((button.width + button.labelWidth) / 2) + Style.space(2)
       y: root.vertical
         ? Math.max(0, Math.round((Style.bar.iconSlot - markMetrics.height) / 4 - size / 2))
+        : Math.round((button.height - size) / 2)
+    }
+
+    // Overdue-task marker. Same treatment as the clock's own event mark above (small dot sized
+    // off Style.space, same FontMetrics-based math) but mirrored to the opposite side/row so the
+    // two can never sit on top of each other -- position, not just colour, tells them apart.
+    // Invisible whenever nothing is overdue (root.overdueTaskCount === 0).
+    Rectangle {
+      readonly property int size: Style.space(5)
+
+      visible: root.overdueTaskCount > 0
+      width: size
+      height: size
+      radius: size / 2
+      color: Color.urgent
+      x: root.vertical
+        ? Math.round((button.width - size) / 2)
+        : Math.round((button.width - button.labelWidth) / 2) - Style.space(2) - size
+      y: root.vertical
+        ? button.height - Math.max(0, Math.round((Style.bar.iconSlot - markMetrics.height) / 4 - size / 2)) - size
         : Math.round((button.height - size) / 2)
     }
   }

@@ -78,6 +78,20 @@ Events from the last sync are available offline via the client-side cache.
 To force-refresh cached assets after an app update, bump `CACHE_NAME` in
 `public/sw.js` from `cal-v1` to `cal-v2` (or any new value).
 
+### Reminders
+
+**⚙ Settings → Reminders** turns on push notifications for the device you are
+on: a reminder a set time before each event, and one at a set hour for all-day
+events, with a switch per calendar. The server sends them, so they arrive while
+the app is closed, on phones (installed app) and desktop browsers alike — a
+desktop browser has to be running to receive them. Turn them on once per device.
+
+The server keeps its push key pair, the subscribed devices and hashes of the
+reminders already sent in `data/push.json` (mode `0600`). Each reminder carries
+the event's title, time and location; it is encrypted for the device, so the
+browser's push service (Google's, for Chrome) relays it without being able to
+read it.
+
 ---
 
 ## Optional password authentication
@@ -105,9 +119,18 @@ Leave `AUTH_PASSWORD` unset (or remove it) to disable authentication entirely.
 ## Reaching it from another machine
 
 The app binds to **`127.0.0.1`** — this machine only. That is deliberate: with no
-`AUTH_PASSWORD` set there is no login at all, and `data/settings.json` holds OAuth
-refresh tokens and, for CalDAV, a password in plaintext. Listening on every
-interface would hand a personal calendar to anyone who can reach the port.
+`AUTH_PASSWORD` set there is no login at all, and `data/settings.json` always
+holds OAuth refresh tokens in plaintext — the CalDAV password too, on a machine
+with no system keyring (below). Listening on every interface would hand a
+personal calendar to anyone who can reach the port.
+
+The CalDAV password doesn't have to be one of those plaintext copies: on first
+start the server moves it out of `data/settings.json` and into the system
+keyring (`secret-tool`, i.e. libsecret — gnome-keyring or any other Secret
+Service provider), blanking the plaintext copy only once it has read the
+keyring copy back and confirmed it matches. With no keyring on the machine — no
+`secret-tool`, a locked one, whatever — the plaintext copy just keeps working,
+so the keyring is an enhancement, not a dependency.
 
 `HOST=0.0.0.0` opens it up. Only do that together with `AUTH_PASSWORD`, and
 preferably not on its own — the app speaks plain HTTP, so a password travels in
@@ -131,10 +154,10 @@ boot; it does not stop the server.
 
 ## Widget API
 
-Two JSON endpoints serve the desktop widget (`omarchy-widget/`). Both send
-`Cache-Control: no-store`, never touch the session cookie, and — when
-`AUTH_PASSWORD` is set — require the same `cal_auth` cookie as the web app
-(otherwise `401`).
+Five JSON endpoints serve the desktop widget (`omarchy-widget/`) — two for
+events, three for CalDAV tasks. All five send `Cache-Control: no-store`, never
+touch the session cookie, and — when `AUTH_PASSWORD` is set — require the same
+`cal_auth` cookie as the web app (otherwise `401`).
 
 **`GET /api/widget/events?start=YYYY-MM-DD&end=YYYY-MM-DD`**
 
@@ -179,11 +202,89 @@ running the old code rewrites it on the next widget poll.
 
 This flag does **not** reach the desktop widget's own cache. Whatever the flag
 is set to, the widget writes every range it fetched to
-`~/.cache/unified-calendar-widget.json` exactly as the API returned it — full
-event bodies, `notes` (descriptions), `location` and `meetingUrl` included — so
-its panel can still render while the server is down. That copy is
-unconditional: there is no setting that turns it off. Delete the file to clear
-it (the widget rewrites it on the next poll).
+`~/.cache/unified-calendar-widget/events.json` — before 0.2 a single flat file,
+`~/.cache/unified-calendar-widget.json` (see the widget's own README for the
+migration) — exactly as the API returned it: full event bodies, `notes`
+(descriptions), `location` and `meetingUrl` included, so its panel can still
+render while the server is down. Tasks get the same unconditional treatment in
+a sibling file, `tasks.json` — neither has a setting that turns it off. Delete
+a file to clear it; the widget rewrites it on the next poll.
+
+### Tasks (VTODO)
+
+Three more JSON endpoints, alongside the two above, read and write tasks from
+the same CalDAV account. They follow the same rules: `Cache-Control: no-store`,
+no session cookie, and the `cal_auth` cookie when `AUTH_PASSWORD` is set.
+
+**`GET /api/widget/tasks`** → `{ tasks, lists, syncedAt, errors }`. Each task
+is `{ id, uid, title, notes, status, completed, completedAt, due, dueHasTime,
+start, priority, percent, categories, listId, listName, listUrl, accountId,
+etag }`. `due` is a plain `YYYY-MM-DD` for a date-only DUE, or an ISO UTC
+string when it carries a time — `dueHasTime` says which. A list that fails to
+fetch is reported in `errors` as `{ listId, message }`; the other lists still
+return their tasks. No CalDAV account configured is not an error: `tasks` and
+`lists` come back empty with `200`. `lists` is every discovered task list as `{ id, name,
+accountId, url }`, empty ones included. `?refresh=lists` re-runs list discovery
+instead of answering from the one-hour cache described below — what the
+widget's manual refresh sends, so a list created on the server appears without
+restarting anything.
+
+**`POST /api/widget/tasks`** — body `{ text, listId? }`, `text` 1-500
+characters, parsed with the quick-add grammar below. Returns `{ task }` and
+`201`. The task goes into the list named by a `+list` token in the text if
+there is one, else the list `listId` names, else the first discovered list.
+An unknown `listId` is `404`; text that parses down to an empty title, two
+`+list` tokens, or a `+list` token that matches no list or several is `400`,
+with an `error` that names the candidate lists (names only).
+
+**`POST /api/widget/tasks/complete`** — body `{ id, completed }`. Returns
+`{ task }`, or `409` when the task changed on the server since it was fetched
+(an etag mismatch) — refetch and retry rather than overwrite someone else's
+edit.
+
+Task-list discovery is a PROPFIND, expensive enough that it's cached in memory
+for an hour rather than repeated on every poll. A failed discovery is never
+cached, so the next call retries it.
+
+**Quick-add syntax**, used by `POST /api/widget/tasks` and the widget's own
+quick-add field:
+
+| Token | Means |
+|---|---|
+| `@word` | a category (repeatable) |
+| `!1`-`!9` | priority |
+| `due:<when>` | see below |
+| `+list` | the task list to file it in, see below |
+| everything left over | the title |
+
+`due:` accepts `today`, `tomorrow`, a weekday name (`friday`/`fri`, meaning the
+next such day, never today), `YYYY-MM-DD`, `D.M.` or `D.M.YYYY`, `+3d`, `+2w`.
+An unparseable `due:` token stays in the title rather than being dropped.
+Tokens are only recognised as whole, whitespace-separated words, so an email
+address or `!important` inside running text is left alone.
+
+`+list` matches list names ignoring case and diacritics; a unique prefix is
+enough (`+gar` for `Garden`), and an exact name wins over a longer one it is a
+prefix of. Write a multi-word name with hyphens: `+home-repairs` for
+`Home Repairs`. The token must start with a letter, so a phone number like
+`+15555550100` stays in the title. A token that matches no list makes the
+server re-discover lists once before giving up, so a list created a moment ago
+is found. Example: `Prune the apple tree +garden due:friday`.
+
+**What the CalDAV server keeps.** These are limits of the Open-Xchange
+(mailbox.org) backend, checked against a live server — not of this code:
+
+- Only `DTSTART`, `DUE`, `CATEGORIES`, `SUMMARY`, `PRIORITY`, `DESCRIPTION`,
+  `VALARM`, `STATUS`, `PERCENT-COMPLETE` and `COMPLETED` survive a round trip;
+  anything else is silently discarded.
+- No recurring tasks — an `RRULE` on a VTODO is rejected — and no subtasks:
+  `RELATED-TO` is dropped.
+- Priority collapses to three buckets on save: 1-2 → 1, 3-6 → 5, 7-9 → 9, so a
+  task added as `!2` comes back as `!1`. The client collapses to the same
+  buckets before displaying a value, so a refresh never changes what's on
+  screen.
+- `sync-collection` is advertised but unreliable for task collections in
+  practice, so every poll does a full fetch instead of an incremental one.
 
 ---
 

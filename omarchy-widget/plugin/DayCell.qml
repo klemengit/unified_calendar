@@ -8,6 +8,10 @@ Item {
   property var day: ({})
   property var info: null
   property bool selected: false
+  // Set by Panel.qml from TasksData -- true when at least one OPEN task is due this day.
+  // Kept as a sibling property rather than folded into `info` since `info` comes straight out of
+  // CalendarModel.dayInfo(), which is out of this unit's scope to edit.
+  property bool taskDue: false
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
   property int cellWidth: Style.space(52)
@@ -96,6 +100,24 @@ Item {
         color: root.ink
       }
     }
+  }
+
+  // Task-due marker: a small diamond in the top-right corner, deliberately a different shape
+  // AND a different position from the event dot row (circles, bottom-center) so the two read as
+  // distinct even under a colour-blind eye or a theme where the two accent colours are close.
+  Rectangle {
+    readonly property int size: Style.space(6)
+
+    visible: root.taskDue
+    width: size
+    height: size
+    rotation: 45
+    color: Color.accent
+    opacity: root.fade
+    anchors.top: parent.top
+    anchors.right: parent.right
+    anchors.topMargin: Style.space(4)
+    anchors.rightMargin: Style.space(5)
   }
 
   MouseArea {

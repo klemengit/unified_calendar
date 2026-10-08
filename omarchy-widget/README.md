@@ -10,10 +10,15 @@ still shows the time and the panel still looks like Omarchy's; what is added is:
   its details inline
 - a collapsed "★ N upcoming" line, opened on demand (`u`, or click it)
 - desktop reminders at configurable offsets before an event
+- a `Calendar | Tasks` tab (`s` to switch) with quick-add, filters, and
+  tick-to-complete for the same CalDAV tasks the server exposes
+- a task-due marker in the month grid, distinct from the event dots, and a dot
+  next to the clock label when a task is overdue
 
-It reads from a **locally running** unified_calendar server and caches what it
-last saw, so the panel still shows events when the server is down — with a
-"synced X ago" note. Nothing is sent anywhere.
+It reads from, and for tasks also writes to, a **locally running**
+unified_calendar server, and caches what it last saw, so the panel still shows
+events and tasks when the server is down — with a "synced X ago" note. Nothing
+is sent anywhere else.
 
 ## Requirements
 
@@ -108,7 +113,11 @@ through Omarchy's own settings UI:
 | `t`, `Enter` | today |
 | `w` | toggle the week start |
 | `u` | toggle the upcoming list |
+| `s` | switch the `Calendar` / `Tasks` tab |
 | `Esc` | close the selected day, then the panel |
+
+`s` rather than `Tab`: `Tab` already cycles the bar's own widgets, so binding
+it here would fight that instead of switching tabs.
 
 The first `h`/`j`/`k`/`l` press puts a day cursor on today — or on the 1st, if
 you have browsed away from this month — and opens that day's events below the
@@ -132,10 +141,52 @@ for that slot, so a typo leaves the key working rather than dead. Giving
 `letters` the same `month`/`year` pair as `arrows` restores the stock clock's
 keys exactly — the day cursor is then reachable only by clicking.
 
+## Tasks
+
+The `Tasks` tab (`s` to get there) reads and writes the same CalDAV tasks the
+server exposes at `/api/widget/tasks` — see the root
+[`README.md`](../README.md#widget-api) for the request/response shapes and
+what the CalDAV server itself will and won't keep.
+
+The tab has a quick-add field (same grammar as the server's, see the root
+README), filters for status (Open/Completed/All), task list, due bucket
+(Overdue/Today/Week/No date), and category, and a checkbox on each task.
+Ticking one is optimistic: the row flips immediately and rolls back if the
+server rejects the change.
+
+**Task lists.** When the account has more than one task list, a row of list
+chips appears, one per list with its open-task count — empty lists included,
+since the chips come from the server's list of lists rather than from the
+tasks. Like the category chips, they filter (any selected list matches; none
+selected means all lists), and each task shows its list's name in small text
+beside the due date. With a single list both stay hidden.
+
+Quick-add picks the list in this order:
+
+1. a `+list` token in the text — `Prune the apple tree +garden due:friday`;
+   case- and diacritic-insensitive, a unique prefix is enough, multi-word
+   names take hyphens (`+home-repairs`);
+2. the one selected list chip, if exactly one is selected;
+3. the first list.
+
+A `+list` token that matches nothing, or more than one list, is refused: the
+text goes back into the field and the status line names the lists it could
+have meant.
+
+The refresh button beside the quick-add field (and the `calendarRefresh` IPC
+call) also makes the server re-discover task lists, which it otherwise caches
+for an hour — use it after creating a list elsewhere.
+
+Days with an open task due get a marker in the month grid — a different shape
+and position from the event dots, so the two never read as the same thing —
+and those tasks are listed and tickable in that day's details alongside its
+events. The bar clock itself only grows an overdue dot when something actually
+is overdue; otherwise the clock looks exactly as it did before Tasks existed.
+
 ## IPC
 
     omarchy-shell omarchy.clock calendarHealth     # JSON: {ok, loadedAt, ...}
-    omarchy-shell omarchy.clock calendarRefresh    # force a poll now
+    omarchy-shell omarchy.clock calendarRefresh    # force a poll now (tasks and task lists too)
     omarchy-shell omarchy.clock selectDay <YYYY-MM-DD>
     omarchy-shell omarchy.clock toggleUpcoming
 
@@ -163,23 +214,28 @@ updated it.
 
 | Path | Holds |
 |---|---|
-| `~/.cache/unified-calendar-widget/events.json` | the offline cache |
+| `~/.cache/unified-calendar-widget/events.json` | the offline event cache |
+| `~/.cache/unified-calendar-widget/tasks.json` | the offline task cache |
 | `~/.local/state/unified-calendar-widget.json` | reminder state — which reminders have fired, and when the last check was |
 | `~/.local/state/unified-calendar-widget/` | the update check's log and paused marker |
 
-The offline cache holds every range fetched exactly as the server returned it —
-whole event bodies, `notes` (descriptions), `location` and `meetingUrl` included
-— and is written unconditionally, with no setting to turn it off. It therefore
-lives in a directory of its own created mode `0700`, so no other local user can
-read it: Quickshell's `FileView` has no permission property and its atomic write
-renames a fresh temp file into place, so the file's own mode cannot be pinned
-from QML. Delete the file to clear it; the next poll rewrites it.
+Both offline caches hold everything fetched exactly as the server returned it
+— `events.json` whole event bodies, `notes` (descriptions), `location` and
+`meetingUrl` included; `tasks.json` every task field — and both are written
+unconditionally, with no setting to turn either off. They therefore share a
+directory created mode `0700`, so no other local user can read them:
+Quickshell's `FileView` has no permission property and its atomic write
+renames a fresh temp file into place, so a file's own mode cannot be pinned
+from QML. Delete a file to clear it; the next poll rewrites it.
 
-A cache left at the pre-0.2 path `~/.cache/unified-calendar-widget.json` is moved
-into the new directory on first start.
+A cache left at the pre-0.2 path `~/.cache/unified-calendar-widget.json` (the
+events cache, before it moved into this directory) is moved into
+`events.json` on first start. `tasks.json` has no such history — the tasks
+feature shipped straight into the directory layout.
 
 This is separate from the *server's* cache (`data/widget-cache.json`), which is
-off unless `UNIFIED_CALENDAR_WIDGET_CACHE=1` and stores only reduced events.
+off unless `UNIFIED_CALENDAR_WIDGET_CACHE=1` and stores only reduced events —
+tasks have no server-side cache at all.
 
 ## Tests
 

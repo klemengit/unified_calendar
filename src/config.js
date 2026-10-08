@@ -13,10 +13,11 @@ const required = (name) => {
 export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   // Loopback by default. This app has no authentication unless AUTH_PASSWORD is set, and
-  // data/settings.json holds OAuth refresh tokens and the CalDAV password in plaintext, so
-  // listening on every interface would put a personal calendar on the local network for
-  // anyone who can reach the port. Set HOST=0.0.0.0 deliberately, behind something that
-  // authenticates — see README, "Reaching it from another machine".
+  // data/settings.json always holds OAuth refresh tokens in plaintext — and the CalDAV
+  // password too, on a machine with no system keyring to hold it instead (see secrets.js)
+  // — so listening on every interface would put a personal calendar on the local network
+  // for anyone who can reach the port. Set HOST=0.0.0.0 deliberately, behind something
+  // that authenticates — see README, "Reaching it from another machine".
   host: process.env.HOST || '127.0.0.1',
   baseUrl: process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`,
   sessionSecret: process.env.SESSION_SECRET || 'dev-only-insecure-secret',

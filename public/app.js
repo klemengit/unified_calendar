@@ -597,13 +597,20 @@ function fitWorkHours() {
   const px = `${Math.max(MIN_SLOT_PX, Math.floor(scroller.clientHeight / slots))}px`;
   if (root.style.getPropertyValue('--slot-height') === px) return;
 
+  // A refit after the first (a resize, or another week's all-day row taking
+  // more room) keeps the time at the top in view rather than jumping back.
+  const oldPx = parseFloat(root.style.getPropertyValue('--slot-height'));
+  const scrollTime = oldPx
+    ? { minutes: Math.round((scroller.scrollTop / oldPx) * (60 / SLOTS_PER_HOUR)) }
+    : visibleScrollTime();
+
   root.style.setProperty('--slot-height', px);
   // FullCalendar only re-measures the rows when their definition changes, and
   // neither updateSize() nor render() counts. Re-setting slotMinTime to the
   // same time, spelled differently, does.
   slotMinTimeSpelling = slotMinTimeSpelling === '00:00:00' ? '00:00' : '00:00:00';
   calendar.setOption('slotMinTime', slotMinTimeSpelling);
-  calendar.scrollToTime(visibleScrollTime());
+  calendar.scrollToTime(scrollTime);
 }
 
 // Strictly-before-today (local midnight) test shared by dayCellClassNames.
@@ -731,6 +738,8 @@ function initCalendar() {
     allDayText: '',
     height: '100%',
     scrollTime: visibleScrollTime(),
+    // Keep the hours in view when moving to another week or day.
+    scrollTimeReset: false,
     windowResize: () => fitWorkHours(),
     nowIndicator: true,
     dayMaxEvents: true,
