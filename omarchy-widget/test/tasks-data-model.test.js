@@ -463,3 +463,19 @@ test('composeTasksStatus: combines a failed local edit with an unreachable serve
   });
   assert.equal(text, 'task not saved · tasks unavailable · synced 1 h ago');
 });
+
+test('isOptimisticId: only the addTask placeholder ids', () => {
+  const m = load();
+  assert.equal(m.isOptimisticId('optimistic-3'), true);
+  assert.equal(m.isOptimisticId('cdavtodo-3'), false);
+  assert.equal(m.isOptimisticId(undefined), false);
+});
+
+test('isCacheFresh: applies newer-or-equal, skips older, applies when nothing is loaded', () => {
+  const m = load();
+  assert.equal(m.isCacheFresh('2026-10-08T10:00:00Z', ''), true);
+  assert.equal(m.isCacheFresh('2026-10-08T10:00:00Z', '2026-10-08T09:00:00Z'), true);
+  assert.equal(m.isCacheFresh('2026-10-08T10:00:00Z', '2026-10-08T10:00:00Z'), true);
+  assert.equal(m.isCacheFresh('2026-10-08T08:00:00Z', '2026-10-08T09:00:00Z'), false);
+  assert.equal(m.isCacheFresh(undefined, '2026-10-08T09:00:00Z'), false);
+});

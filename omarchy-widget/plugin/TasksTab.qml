@@ -17,6 +17,8 @@ Column {
   // Exposed so Panel.qml can block its PanelKeyCatcher while the quick-add field has focus --
   // the same wiring root.editingLife already uses for the birth-year/life-expectancy fields.
   readonly property bool editing: quickAddField.activeFocus
+  // Asks Panel.qml to put keyboard focus back on its key catcher (the field just gave it up).
+  signal focusReleaseRequested()
 
   property string filterStatus: "open"
   property var filterBuckets: []
@@ -112,7 +114,10 @@ Column {
       foreground: root.foreground
       font.family: root.fontFamily
       onAccepted: root.submitQuickAdd()
-      Keys.onEscapePressed: quickAddField.focus = false
+      Keys.onEscapePressed: {
+        quickAddField.focus = false
+        root.focusReleaseRequested()
+      }
     }
 
     // Manual refresh: also re-discovers task lists on the server, so a list created elsewhere

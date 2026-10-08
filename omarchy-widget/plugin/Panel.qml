@@ -34,6 +34,8 @@ Panel {
   // key here is already spoken for by the calendar ([ ] { } t w u) or by the day cursor (hjkl).
   property string activeTab: "calendar"
 
+  readonly property bool calendarTabActive: root.activeTab === "calendar"
+
   function switchActiveTab() {
     root.activeTab = root.activeTab === "calendar" ? "tasks" : "calendar"
   }
@@ -183,9 +185,12 @@ Panel {
     return root.calendarData ? root.calendarData.dayInfo(key, root.todayKey) : null
   }
 
+  // Built once per tasks change rather than once per day cell.
+  readonly property var openDueIndex: root.tasksData ? DayTasksModel.openDueDayIndex(root.tasksData.tasks) : ({})
+
   // revision is passed only so the cell bindings re-evaluate when tasks change
   function dayHasOpenTask(key, revision) {
-    return root.tasksData ? !!DayTasksModel.openDueDayIndex(root.tasksData.tasks)[key] : false
+    return !!root.openDueIndex[key]
   }
 
   function selectDay(key) {
@@ -360,24 +365,26 @@ Panel {
       // the arrow mapping — a fallback that agrees with the configured keys
       // instead of quietly reverting to the stock month/year stepping.
       onMoveRequested: function(dx, dy) {
+        if (!root.calendarTabActive) return
         if (dx !== 0) root.navigate(root.navKeys.arrows.horizontal, dx)
         if (dy !== 0) root.navigate(root.navKeys.arrows.vertical, dy)
       }
-      onActivateRequested: root.goToToday()
+      onActivateRequested: { if (root.calendarTabActive) root.goToToday() }
       onCloseRequested: {
-        if (root.selectedDayKey !== "") root.selectedDayKey = ""
+        if (root.calendarTabActive && root.selectedDayKey !== "") root.selectedDayKey = ""
         else root.close()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
-        if (t === "[") root.moveMonth(-1)
+        if (t === "s" || t === "S") root.switchActiveTab()
+        else if (!root.calendarTabActive) return
+        else if (t === "[") root.moveMonth(-1)
         else if (t === "]") root.moveMonth(1)
         else if (t === "{") root.moveYear(-1)
         else if (t === "}") root.moveYear(1)
         else if (t === "t" || t === "T") root.goToToday()
         else if (t === "w" || t === "W") root.toggleWeekStart()
         else if (t === "u" || t === "U") root.toggleUpcoming()
-        else if (t === "s" || t === "S") root.switchActiveTab()
       }
 
       // Holds the focus, so it sees keys before the catcher it sits in and
@@ -391,7 +398,7 @@ Panel {
         height: 0
 
         Keys.onPressed: function(event) {
-          if (root.editingLife) return
+          if (root.editingLife || !root.calendarTabActive) return
 
           var arrows = root.navKeys.arrows
           var letters = root.navKeys.letters
@@ -969,6 +976,7 @@ Panel {
             tasksData: root.tasksData
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
+            onFocusReleaseRequested: Qt.callLater(function() { if (navCatcher) navCatcher.forceActiveFocus() })
           }
         }
       }

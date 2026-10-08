@@ -309,3 +309,18 @@ function composeTasksStatus(input) {
   if (names.length > 0) parts.push(names.join(", "))
   return parts.join(" · ")
 }
+
+// True for the placeholder ids addTask inserts before the server has assigned a real one.
+function isOptimisticId(id) {
+  return typeof id === "string" && id.indexOf("optimistic-") === 0
+}
+
+// Whether a cached snapshot may replace what is already loaded: only when it is at least as new.
+// Equal counts as newer so a peer's local edit (persisted without a fresh syncedAt) still lands.
+// Unparseable timestamps degrade to "apply" when nothing is loaded yet, "skip" otherwise.
+function isCacheFresh(cacheSyncedAt, currentSyncedAt) {
+  var current = Date.parse(currentSyncedAt)
+  if (!isFinite(current)) return true
+  var cached = Date.parse(cacheSyncedAt)
+  return isFinite(cached) && cached >= current
+}

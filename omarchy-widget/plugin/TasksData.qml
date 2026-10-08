@@ -43,9 +43,10 @@ QtObject {
   property string _lastError: ""
   property var _lastErrors: []
   property int _consecutiveFailures: 0
-  // True once a live fetch has completed at least once -- guards the cache load from clobbering
-  // fresher data that already arrived (see _onCacheLoaded).
-  property bool _liveLoaded: false
+  // Bumped on every local edit (and its server reply). A fetch that started before the latest bump
+  // may predate the edit, so its result is dropped rather than overwriting the optimistic state.
+  property int _editGen: 0
+  property int _fetchGen: 0
 
   property var _toggleQueue: [] // [{ id, flag }], queued while a toggle request is in flight
   property var _pendingToggle: null
@@ -80,6 +81,7 @@ QtObject {
     if (!force && now - root._lastFullFetchMs < 60000) return
     if (root._fetching) return
     root._lastFullFetchMs = now
+    root._fetchGen = root._editGen
     root._fetching = true
     root.loading = true
     var url = TasksDataModel.buildTasksUrl(root._serverUrl, refreshLists === true)
@@ -113,8 +115,13 @@ QtObject {
     root._serverReachable = true
     root._lastError = ""
     root._consecutiveFailures = 0
-    root._liveLoaded = true
     retryTimer.stop()
+    if (root._fetchGen !== root._editGen) {
+      // An edit landed while this request was in flight; its data may predate it. Fetch again.
+      root._updateStatus()
+      root.refresh(true)
+      return
+    }
     root.tasks = parsed.tasks
     root.lists = parsed.lists
     root.syncedAt = parsed.syncedAt
@@ -151,6 +158,7 @@ QtObject {
     var trimmed = String(text === undefined || text === null ? "" : text).trim()
     if (trimmed === "") return
 
+    root._editGen += 1
     root._optimisticCounter += 1
     var tempId = "optimistic-" + root._optimisticCounter
     var preview = TasksDataModel.previewQuickAdd(trimmed)
@@ -184,7 +192,8 @@ QtObject {
     if (root._pendingAdd !== null || root._addQueue.length === 0) return
     var next = root._addQueue.shift()
     root._pendingAdd = next
-    var body = { text: next.text }
+    // `today` anchors due:today/friday/+3d to this machine's date; the server's clock zone can differ.
+    var body = { text: next.text, today: Qt.formatDate(new Date(), "yyyy-MM-dd") }
     if (next.listId !== "") body.listId = next.listId
     var url = TasksDataModel.buildTasksUrl(root._serverUrl)
     var payload = JSON.stringify(body)
@@ -198,12 +207,14 @@ QtObject {
     var pending = root._pendingAdd
     root._pendingAdd = null
     if (!pending) return
+    root._editGen += 1
 
     var trimmed = String(rawText || "").trim()
     var task = trimmed !== "" ? TasksDataModel.parseTaskResponse(trimmed) : null
 
     if (task) {
       root.tasks = TasksDataModel.replaceTaskById(root.tasks, pending.tempId, task)
+      root._persistCache()
       root._addFailed = false
       root._addError = ""
       addErrorTimer.stop()
@@ -223,6 +234,8 @@ QtObject {
   // ---- completion toggle -----------------------------------------------------------------
 
   function toggleComplete(id) {
+    // A placeholder has no server id yet; posting "optimistic-N" would only fail and roll back.
+    if (TasksDataModel.isOptimisticId(id)) return
     var target = null
     for (var i = 0; i < root.tasks.length; i++) {
       if (root.tasks[i] && root.tasks[i].id === id) {
@@ -233,6 +246,7 @@ QtObject {
     if (!target) return
 
     var flag = !TasksDataModel.isTaskCompleted(target)
+    root._editGen += 1
     root.tasks = TasksDataModel.applyOptimisticComplete(root.tasks, id, flag, root._nowIso())
     root._enqueueToggle(id, flag)
   }
@@ -262,6 +276,7 @@ QtObject {
     var pending = root._pendingToggle
     root._pendingToggle = null
     if (!pending) return
+    root._editGen += 1
 
     var trimmed = String(rawText || "").trim()
     var task = trimmed !== "" ? TasksDataModel.parseTaskResponse(trimmed) : null
@@ -269,6 +284,7 @@ QtObject {
 
     if (ok) {
       root.tasks = TasksDataModel.replaceTaskById(root.tasks, pending.id, task)
+      root._persistCache()
       root._toggleFailed = false
       toggleErrorTimer.stop()
     } else {
@@ -301,9 +317,6 @@ QtObject {
   }
 
   function _onCacheLoaded(rawText) {
-    // A live fetch that already landed always wins -- the cache is only a fallback for the
-    // window before the first successful poll (or while the server is unreachable).
-    if (root._liveLoaded) return
     var parsed
     try {
       parsed = JSON.parse(rawText)
@@ -311,6 +324,9 @@ QtObject {
       return
     }
     if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.tasks)) return
+    // Non-primary copies never poll, so they rely on every reload to pick up the primary's
+    // writes. Newer-or-equal wins; an older cache never clobbers fresher live data.
+    if (!TasksDataModel.isCacheFresh(parsed.syncedAt, root.syncedAt)) return
 
     root.tasks = parsed.tasks
     root.lists = Array.isArray(parsed.lists) ? parsed.lists : []

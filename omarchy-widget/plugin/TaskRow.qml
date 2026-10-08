@@ -2,6 +2,7 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "TaskModel.js" as TaskModel
+import "TasksDataModel.js" as TasksDataModel
 
 // One row in the Tasks tab list: a checkbox, the title, the task's list (only when more than one
 // list is loaded), a due-date label, and category chips.
@@ -55,6 +56,8 @@ Item {
       foreground: root.completed ? Color.accent : root.dimForeground
       hoverColor: Color.accent
       fontFamily: root.fontFamily
+      // An optimistic placeholder has no server id yet, so it cannot be toggled.
+      enabled: !!root.task && !TasksDataModel.isOptimisticId(root.task.id)
       onClicked: if (root.tasksData && root.task) root.tasksData.toggleComplete(root.task.id)
     }
 
