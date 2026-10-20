@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Column {
@@ -7,7 +8,7 @@ Column {
 
   property var calendarData: null
   property bool expanded: false
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property string expandedKey: ""
 
@@ -33,7 +34,7 @@ Column {
     Rectangle {
       anchors.fill: parent
       radius: Style.cornerRadius
-      color: summaryMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
+      color: summaryMouse.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent) : "transparent"
     }
 
     Text {
@@ -44,7 +45,7 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       text: "󰓎 " + root.total + " upcoming"
       color: summaryMouse.containsMouse
-        ? Style.hoverStateColor(root.foreground, Color.accent)
+        ? Style.hoverStateColor(root.foreground, Commons.Color.accent)
         : Qt.darker(root.foreground, 1.5)
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

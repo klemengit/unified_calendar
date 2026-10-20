@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 import "CalendarModel.js" as CalendarModel
@@ -258,7 +259,7 @@ BarWidget {
       width: size
       height: size
       radius: size / 2
-      color: Color.bar.active
+      color: Commons.Color.bar.active
       x: root.vertical
         ? Math.round((button.width - size) / 2)
         : Math.round((button.width + button.labelWidth) / 2) + Style.space(2)

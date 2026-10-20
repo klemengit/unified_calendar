@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "CalendarModel.js" as CalendarModel
 
 Column {
@@ -7,7 +8,7 @@ Column {
 
   property var calendarData: null
   property string dayKey: ""
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property string expandedKey: ""
 

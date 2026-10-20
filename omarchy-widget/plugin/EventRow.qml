@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "CalendarModel.js" as CalendarModel
 import "DataModel.js" as DataModel
@@ -12,7 +13,7 @@ Item {
   property string dayKey: ""
   property bool showDate: false
   property bool expanded: false
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
 
   signal toggleRequested()
@@ -54,8 +55,8 @@ Item {
     anchors.fill: parent
     radius: Style.cornerRadius
     color: rowMouse.containsMouse
-      ? Style.hoverFillFor(root.foreground, Color.accent)
-      : (root.expanded ? Style.normalFillFor(root.foreground, Color.accent) : "transparent")
+      ? Style.hoverFillFor(root.foreground, Commons.Color.accent)
+      : (root.expanded ? Style.normalFillFor(root.foreground, Commons.Color.accent) : "transparent")
   }
 
   MouseArea {
@@ -124,8 +125,8 @@ Item {
       anchors.verticalCenter: parent.verticalCenter
       iconText: root.important ? "󰓎" : "󰓒"
       tooltipText: root.important ? "Unmark important" : "Mark important"
-      foreground: root.important ? Color.bar.active : root.dimForeground
-      hoverColor: root.important ? Color.bar.active : root.foreground
+      foreground: root.important ? Commons.Color.bar.active : root.dimForeground
+      hoverColor: root.important ? Commons.Color.bar.active : root.foreground
       fontFamily: root.fontFamily
       onClicked: if (root.calendarData && root.ev) root.calendarData.toggleImportant(root.ev.id)
     }
@@ -208,8 +209,8 @@ Item {
           height: actionLabel.implicitHeight + Style.space(6)
           radius: Style.cornerRadius
           color: actionMouse.containsMouse
-            ? Style.hoverFillFor(root.foreground, Color.accent)
-            : Style.normalFillFor(root.foreground, Color.accent)
+            ? Style.hoverFillFor(root.foreground, Commons.Color.accent)
+            : Style.normalFillFor(root.foreground, Commons.Color.accent)
 
           Text {
             id: actionLabel
@@ -217,7 +218,7 @@ Item {
             anchors.centerIn: parent
             text: action.modelData.icon + "  " + action.modelData.label
             color: actionMouse.containsMouse
-              ? Style.hoverStateColor(root.foreground, Color.accent)
+              ? Style.hoverStateColor(root.foreground, Commons.Color.accent)
               : root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall

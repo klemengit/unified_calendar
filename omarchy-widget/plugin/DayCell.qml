@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "CalendarModel.js" as CalendarModel
 
 Item {
@@ -8,7 +9,7 @@ Item {
   property var day: ({})
   property var info: null
   property bool selected: false
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property int cellWidth: Style.space(52)
   property int cellHeight: Style.space(34)
@@ -22,12 +23,12 @@ Item {
   readonly property real fade: spent ? (day.inMonth && !important ? 0.45 : 0.7) : 1
   // A past day's fill is painted faded, so the number's contrast is judged against that blend
   readonly property color shownFill: Qt.rgba(
-    Color.bar.active.r * fillOpacity + Color.background.r * (1 - fillOpacity),
-    Color.bar.active.g * fillOpacity + Color.background.g * (1 - fillOpacity),
-    Color.bar.active.b * fillOpacity + Color.background.b * (1 - fillOpacity),
+    Commons.Color.bar.active.r * fillOpacity + Commons.Color.background.r * (1 - fillOpacity),
+    Commons.Color.bar.active.g * fillOpacity + Commons.Color.background.g * (1 - fillOpacity),
+    Commons.Color.bar.active.b * fillOpacity + Commons.Color.background.b * (1 - fillOpacity),
     1)
-  readonly property color onFill: CalendarModel.readableOn(String(shownFill), String(Color.background), String(foreground)) === "background"
-    ? Color.background
+  readonly property color onFill: CalendarModel.readableOn(String(shownFill), String(Commons.Color.background), String(foreground)) === "background"
+    ? Commons.Color.background
     : foreground
   readonly property color ink: important
     ? onFill
@@ -42,7 +43,7 @@ Item {
     anchors.fill: parent
     visible: root.important
     radius: Style.cornerRadius
-    color: Color.bar.active
+    color: Commons.Color.bar.active
     opacity: root.fillOpacity
   }
 
@@ -51,8 +52,8 @@ Item {
     visible: root.selected || cellMouse.containsMouse
     radius: Style.cornerRadius
     color: root.selected
-      ? Style.selectedFillFor(root.important ? root.onFill : root.foreground, Color.accent)
-      : Style.hoverFillFor(root.important ? root.onFill : root.foreground, Color.accent)
+      ? Style.selectedFillFor(root.important ? root.onFill : root.foreground, Commons.Color.accent)
+      : Style.hoverFillFor(root.important ? root.onFill : root.foreground, Commons.Color.accent)
   }
 
   Rectangle {
@@ -62,7 +63,7 @@ Item {
     radius: root.important ? Math.max(0, Style.cornerRadius - Style.space(2)) : Style.cornerRadius
     color: "transparent"
     border.width: Style.spacing.hairline
-    border.color: root.important ? root.onFill : Style.normalBorderFor(root.foreground, Color.accent)
+    border.color: root.important ? root.onFill : Style.normalBorderFor(root.foreground, Commons.Color.accent)
   }
 
   Text {

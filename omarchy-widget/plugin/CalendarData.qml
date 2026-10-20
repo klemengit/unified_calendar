@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import "CalendarModel.js" as CalendarModel
 import "DataModel.js" as DataModel
 
@@ -307,9 +308,9 @@ QtObject {
       primary: root.primary,
       instances: root.instances,
       colors: {
-        attention: String(Color.bar.active),
-        background: String(Color.background),
-        foreground: String(Color.foreground)
+        attention: String(Commons.Color.bar.active),
+        background: String(Commons.Color.background),
+        foreground: String(Commons.Color.foreground)
       }
     })
   }
