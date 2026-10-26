@@ -551,8 +551,9 @@ function updateTitleWeek(view) {
   const title = document.querySelector('#calendar .fc-toolbar-title');
   if (!title) return;
 
-  const lastDay = new Date(view.currentEnd.getTime() - 86400000);
-  const spanWeeks = (view.currentEnd - view.currentStart) / (7 * 86400000);
+  const lastDay = prevDay(view.currentEnd);
+  // Rounded to whole days: a DST change makes one day 23 or 25 hours long.
+  const spanWeeks = Math.round((view.currentEnd - view.currentStart) / 86400000) / 7;
   if (spanWeeks > MAX_TITLE_WEEKS) {
     delete title.dataset.week;
     return;
@@ -1427,7 +1428,7 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
       startInput.type = 'date';
       endInput.type   = 'date';
       startInput.value = toLocalYmd(event.start);
-      const inclEnd = event.end ? new Date(event.end.getTime() - 86400000) : event.start;
+      const inclEnd = event.end ? prevDay(event.end) : event.start;
       endInput.value = toLocalYmd(inclEnd);
     } else {
       startInput.type = 'datetime-local';
@@ -1458,7 +1459,7 @@ function openEventForm({ start = null, end = null, allDay = false, event = null 
       startInput.value = start ? toLocalYmd(start) : '';
       // For a multi-day drag: end is exclusive, show inclusive last day
       endInput.value = (end && end > start)
-        ? toLocalYmd(new Date(end.getTime() - 86400000))
+        ? toLocalYmd(prevDay(end))
         : (start ? toLocalYmd(start) : '');
     } else {
       startInput.type = 'datetime-local';
@@ -1721,7 +1722,7 @@ async function handleEventChange(info) {
   if (ev.allDay) {
     start = toLocalYmd(ev.start);
     // FullCalendar's end is exclusive; the server expects an inclusive last day (matches the edit form).
-    const inclEnd = ev.end ? new Date(ev.end.getTime() - 86400000) : ev.start;
+    const inclEnd = ev.end ? prevDay(ev.end) : ev.start;
     end = toLocalYmd(inclEnd);
   } else {
     start = ev.start.toISOString();
@@ -2031,7 +2032,7 @@ function formatEventTime(event) {
   const tOpts = timeFmt();
   if (event.allDay) {
     const start = event.start;
-    const end = event.end ? new Date(event.end.getTime() - 86400000) : null;
+    const end = event.end ? prevDay(event.end) : null;
     if (!end || end.toDateString() === start.toDateString())
       return start.toLocaleDateString([], dOpts) + ' · All day';
     return `${start.toLocaleDateString([], dOpts)} – ${end.toLocaleDateString([], dOpts)} · All day`;
@@ -2052,6 +2053,14 @@ function formatEventTime(event) {
 function toDatetimeLocal(d) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// The calendar day before d. Steps by date, not by 24 h, so it stays right
+// across the 23-hour and 25-hour days of a DST change.
+function prevDay(d) {
+  const out = new Date(d);
+  out.setDate(out.getDate() - 1);
+  return out;
 }
 
 function toLocalYmd(d) {
