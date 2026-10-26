@@ -13,6 +13,19 @@ function localYmd(d) {
   ).padStart(2, '0')}`;
 }
 
+// Length of an all-day event in calendar days (at least 1). Rounding absorbs
+// the ±1 h of a DST change between the two local midnights.
+function daySpan(ev) {
+  if (!ev.end) return 1;
+  return Math.max(1, Math.round((ev.end - ev.start) / 86400000));
+}
+
+function addDays(d, n) {
+  const out = new Date(d);
+  out.setDate(out.getDate() + n);
+  return out;
+}
+
 function toEvent(ev, feed, start, end, allDay) {
   return {
     id: `ics-${feed.id}-${ev.uid || ''}-${start.toISOString()}`,
@@ -40,8 +53,6 @@ export async function fetchIcsEvents(feed, timeMin, timeMax) {
     if (!ev || ev.type !== 'VEVENT' || !ev.start) continue;
 
     const allDay = ev.datetype === 'date';
-    const durationMs =
-      ev.end && ev.start ? ev.end.getTime() - ev.start.getTime() : 0;
 
     if (!ev.rrule) {
       const endTime = ev.end || ev.start;
@@ -50,32 +61,21 @@ export async function fetchIcsEvents(feed, timeMin, timeMax) {
       continue;
     }
 
-    // Recurring: ask the rrule for occurrences in the window (pad the start by
-    // the event duration so events that began earlier but overlap still show).
-    const occurrences = ev.rrule.between(
-      new Date(rangeStart.getTime() - durationMs),
-      rangeEnd,
-      true
-    );
-
-    for (const occ of occurrences) {
-      const dateKey = occ.toISOString().slice(0, 10);
-
-      // Skip dates explicitly removed from the series.
-      if (ev.exdate && ev.exdate[dateKey]) continue;
-
-      // Use the override if this occurrence was individually edited.
-      const override = ev.recurrences && ev.recurrences[dateKey];
-      if (override) {
-        events.push(
-          toEvent(override, feed, override.start, override.end || override.start, allDay)
-        );
-        continue;
-      }
-
-      const start = occ;
-      const end = new Date(occ.getTime() + durationMs);
-      events.push(toEvent(ev, feed, start, end, allDay));
+    // Recurring: node-ical expands the rule in the event's own time zone and
+    // applies EXDATEs and RECURRENCE-ID overrides, so wall-clock times and
+    // all-day dates hold across DST changes. expandOngoing keeps occurrences
+    // that began before the window but still overlap it.
+    const instances = ical.expandRecurringEvent(ev, {
+      from: rangeStart,
+      to: rangeEnd,
+      expandOngoing: true,
+    });
+    for (const inst of instances) {
+      // node-ical's end is start + a fixed span in ms, which lands on the
+      // wrong date when a 23 h or 25 h DST day falls inside an all-day event.
+      // Count the span in calendar days instead.
+      const end = allDay ? addDays(inst.start, daySpan(inst.event)) : inst.end;
+      events.push(toEvent(inst.event, feed, inst.start, end, allDay));
     }
   }
 
